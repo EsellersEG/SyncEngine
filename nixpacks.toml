@@ -1,0 +1,11 @@
+[phases.setup]
+nixPkgs = ["nodejs_20", "npm-10_x"]
+
+[phases.install]
+cmds = ["rm -f package-lock.json", "npm install"]
+
+[phases.build]
+cmds = ["npm run build:all"]
+
+[start]
+cmd = "npm start"
