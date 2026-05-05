@@ -1,0 +1,58 @@
+{
+  "name": "sync-engine",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Multi-channel commerce synchronization platform",
+  "scripts": {
+    "dev:server": "tsx watch server.ts",
+    "dev:client": "vite",
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
+    "build": "vite build",
+    "build:server": "esbuild server.ts --bundle --platform=node --outfile=dist/server.cjs --external:express --external:pg --external:dotenv --external:cors --external:googleapis --external:bcryptjs --external:jsonwebtoken --external:crypto-js",
+    "build:all": "npm run build && npm run build:server",
+    "start": "node dist/server.cjs",
+    "db:init": "node scripts/initDb.js"
+  },
+  "keywords": [
+    "shopify",
+    "sync",
+    "ecommerce",
+    "multichannel"
+  ],
+  "author": "E-sellers",
+  "license": "ISC",
+  "dependencies": {
+    "@shopify/shopify-api": "^13.0.0",
+    "bcryptjs": "^3.0.3",
+    "concurrently": "^9.2.1",
+    "cors": "^2.8.6",
+    "crypto-js": "^4.2.0",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "googleapis": "^171.4.0",
+    "jsonwebtoken": "^9.0.3",
+    "lucide-react": "^0.474.0",
+    "pg": "^8.20.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^7.1.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.0",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/cors": "^2.8.19",
+    "@types/crypto-js": "^4.2.2",
+    "@types/express": "^5.0.6",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^25.6.0",
+    "@types/pg": "^8.20.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "esbuild": "^0.28.0",
+    "tailwindcss": "^4.1.0",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3",
+    "vite": "^6.3.4"
+  }
+}
