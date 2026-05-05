@@ -13,7 +13,7 @@
     "build": "vite build",
     "build:server": "esbuild server.ts --bundle --platform=node --outfile=dist/server.cjs --external:express --external:pg --external:dotenv --external:cors --external:googleapis --external:bcryptjs --external:jsonwebtoken --external:crypto-js",
     "build:all": "npm run build && npm run build:server",
-    "start": "node dist/server.cjs",
+    "start": "npm run db:init && node dist/server.cjs",
     "db:init": "node scripts/initDb.js"
   },
   "keywords": [
