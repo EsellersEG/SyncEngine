@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "type": "module",
   "description": "Multi-channel commerce synchronization platform",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
     "dev:server": "tsx watch server.ts",
     "dev:client": "vite",
