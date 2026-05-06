@@ -36,28 +36,62 @@ interface AttributeMapping {
   target_field: string;
 }
 
-const BATCH_SIZE = 25;
+const BATCH_SIZE = 4; // Conservative parallel batch size for GraphQL cost budget
 const MAX_RETRIES = 8;
 const RETRY_DELAY_MS = 2000;
+const REST_CALL_DELAY_MS = 550; // Stay under 2 req/sec REST limit
 
-// ── GraphQL Helper ─────────────────────────────────────────────────────────
-async function shopifyGraphQL(channel: Channel, query: string, variables = {}): Promise<unknown> {
+// ── Rate-limited fetch with retry ──────────────────────────────────────────
+async function shopifyFetchWithRetry(url: string, options: RequestInit, retries = 0): Promise<Response> {
+  const res = await fetch(url, options);
+  if (res.status === 429) {
+    const retryAfter = parseFloat(res.headers.get('Retry-After') || '2') * 1000;
+    const backoff = Math.max(retryAfter, RETRY_DELAY_MS * Math.pow(1.5, retries));
+    if (retries >= MAX_RETRIES) throw new Error(`Shopify rate limit exceeded after ${MAX_RETRIES} retries`);
+    console.log(`[SyncFlow] 429 Rate limited, waiting ${Math.round(backoff)}ms (retry ${retries + 1})`);
+    await sleep(backoff);
+    return shopifyFetchWithRetry(url, options, retries + 1);
+  }
+  return res;
+}
+
+// ── GraphQL Helper with rate limit handling ────────────────────────────────
+async function shopifyGraphQL(channel: Channel, gqlQuery: string, variables = {}, retries = 0): Promise<unknown> {
   const url = `https://${channel.shopify_store_url}/admin/api/${channel.shopify_api_version}/graphql.json`;
-  const res = await fetch(url, {
+  const res = await shopifyFetchWithRetry(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'X-Shopify-Access-Token': channel.shopify_access_token,
     },
-    body: JSON.stringify({ query, variables }),
+    body: JSON.stringify({ query: gqlQuery, variables }),
   });
-  const json = await res.json() as { errors?: unknown[]; data?: unknown; extensions?: { cost?: { throttleStatus?: { currentlyAvailable?: number } } } };
-  if (json.errors) throw new Error(JSON.stringify(json.errors));
 
-  // Throttle check
+  const json = await res.json() as {
+    errors?: Array<{ message?: string }>;
+    data?: unknown;
+    extensions?: { cost?: { throttleStatus?: { currentlyAvailable?: number; restoreRate?: number } } }
+  };
+
+  // Handle throttled errors in response body
+  if (json.errors) {
+    const throttled = json.errors.some(e => e.message?.includes('Throttled'));
+    if (throttled && retries < MAX_RETRIES) {
+      const backoff = RETRY_DELAY_MS * Math.pow(1.5, retries);
+      console.log(`[SyncFlow] GraphQL throttled, waiting ${Math.round(backoff)}ms (retry ${retries + 1})`);
+      await sleep(backoff);
+      return shopifyGraphQL(channel, gqlQuery, variables, retries + 1);
+    }
+    throw new Error(JSON.stringify(json.errors));
+  }
+
+  // Proactive throttle: if available cost drops low, pause to let it restore
   const cost = json.extensions?.cost?.throttleStatus;
-  if (cost && cost.currentlyAvailable && cost.currentlyAvailable < 100) {
-    await sleep(2000);
+  if (cost && cost.currentlyAvailable !== undefined && cost.currentlyAvailable < 200) {
+    const restoreRate = cost.restoreRate || 50;
+    const waitTime = Math.ceil((200 - cost.currentlyAvailable) / restoreRate) * 1000;
+    console.log(`[SyncFlow] Low cost budget (${cost.currentlyAvailable}), pausing ${waitTime}ms`);
+    await sleep(waitTime);
   }
 
   return json.data;
@@ -67,51 +101,64 @@ function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// ── SKU → Shopify ID lookup ───────────────────────────────────────────────
+// ── SKU → Shopify ID lookup via GraphQL (much better rate limits) ─────────
 async function getShopifyProductMap(channel: Channel): Promise<Map<string, { productId: string; variantId: string; inventoryItemId: string }>> {
   const map = new Map();
-
-  // Use Shopify REST to get all products with variants
-  let pageInfo: string | null = null;
+  let cursor: string | null = null;
   let hasMore = true;
 
+  const gqlQuery = `
+    query getProducts($cursor: String) {
+      products(first: 250, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        edges {
+          node {
+            id
+            variants(first: 100) {
+              edges {
+                node {
+                  id
+                  sku
+                  inventoryItem { id }
+                }
+              }
+            }
+          }
+        }
+      }
+    }`;
+
   while (hasMore) {
-    const url = `https://${channel.shopify_store_url}/admin/api/${channel.shopify_api_version}/products.json?limit=250${pageInfo ? `&page_info=${pageInfo}` : ''}`;
-    const res = await fetch(url, {
-      headers: { 'X-Shopify-Access-Token': channel.shopify_access_token },
-    });
-    const linkHeader = res.headers.get('Link');
-    if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`Shopify API error (${res.status}): ${errText}`);
-    }
-    const data = await res.json() as { products?: Array<{ id: number; variants: Array<{ sku: string; id: number; inventory_item_id: number }> }> };
+    const data = await shopifyGraphQL(channel, gqlQuery, { cursor }) as {
+      products: {
+        pageInfo: { hasNextPage: boolean; endCursor: string };
+        edges: Array<{
+          node: {
+            id: string;
+            variants: { edges: Array<{ node: { id: string; sku: string; inventoryItem: { id: string } } }> };
+          };
+        }>;
+      };
+    };
 
-    if (!data.products || !Array.isArray(data.products)) {
-      throw new Error(`Shopify returned unexpected response: ${JSON.stringify(data).slice(0, 200)}`);
-    }
-
-    for (const product of data.products) {
-      for (const variant of product.variants) {
-        if (variant.sku) {
-          map.set(variant.sku, {
-            productId: `gid://shopify/Product/${product.id}`,
-            variantId: `gid://shopify/ProductVariant/${variant.id}`,
-            inventoryItemId: `gid://shopify/InventoryItem/${variant.inventory_item_id}`,
+    for (const productEdge of data.products.edges) {
+      for (const variantEdge of productEdge.node.variants.edges) {
+        const v = variantEdge.node;
+        if (v.sku) {
+          map.set(v.sku, {
+            productId: productEdge.node.id,
+            variantId: v.id,
+            inventoryItemId: v.inventoryItem.id,
           });
         }
       }
     }
 
-    if (linkHeader && linkHeader.includes('rel="next"')) {
-      const match = linkHeader.match(/page_info=([^&>]+).*rel="next"/);
-      pageInfo = match ? match[1] : null;
-      hasMore = !!pageInfo;
-    } else {
-      hasMore = false;
-    }
+    hasMore = data.products.pageInfo.hasNextPage;
+    cursor = data.products.pageInfo.endCursor;
   }
 
+  console.log(`[SyncFlow] Product map loaded: ${map.size} SKUs`);
   return map;
 }
 
@@ -122,6 +169,8 @@ async function turboSync(channel: Channel, products: ProductRow[], mappings: Att
   for (let i = 0; i < products.length; i += BATCH_SIZE) {
     const batch = products.slice(i, i + BATCH_SIZE);
     await Promise.all(batch.map(p => syncProductTurbo(channel, p, mappings, shopifyMap, jobId)));
+    // Update progress after each batch
+    await query('UPDATE sync_jobs SET processed_count = $1 WHERE id = $2', [Math.min(i + BATCH_SIZE, products.length), jobId]);
   }
 }
 
@@ -202,7 +251,8 @@ async function syncProductTurbo(
 async function individualSync(channel: Channel, products: ProductRow[], mappings: AttributeMapping[], jobId: string, withImages: boolean) {
   const shopifyMap = await getShopifyProductMap(channel);
 
-  for (const product of products) {
+  for (let i = 0; i < products.length; i++) {
+    const product = products[i];
     const shopifyIds = shopifyMap.get(product.sku);
     const mapped = applyMappings(product.raw_data, mappings);
 
@@ -236,6 +286,9 @@ async function individualSync(channel: Channel, products: ProductRow[], mappings
       await logSyncEntry(jobId, product.sku, 'failed', String(err));
       await query('UPDATE sync_jobs SET failed_count = failed_count + 1 WHERE id = $1', [jobId]);
     }
+
+    // Update progress
+    await query('UPDATE sync_jobs SET processed_count = $1 WHERE id = $2', [i + 1, jobId]);
   }
 }
 
