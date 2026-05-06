@@ -43,19 +43,16 @@ app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', version: '1.0.0', timestamp: new Date().toISOString() });
 });
 
-// ── Serve Frontend ───────────────────────────────────────────
-import fs from 'fs';
-const clientPath = path.join(process.cwd(), 'dist/client');
-if (fs.existsSync(clientPath)) {
-  app.use(express.static(clientPath));
-  app.get('*', (_req, res) => {
-    res.sendFile(path.join(clientPath, 'index.html'));
-  });
-} else {
-  app.get('/', (_req, res) => {
-    res.send('API is running. Frontend build not found at ' + clientPath);
-  });
-}
+// ── Serve Frontend ─────────────────────────────────────────────────────────
+// The server is bundled to dist/server.js, so dist/client is a sibling folder.
+// We use import.meta.url so this works correctly regardless of cwd.
+const __serverDir = path.dirname(fileURLToPath(import.meta.url));
+const clientPath = path.join(__serverDir, 'client');
+console.log(`Serving frontend from: ${clientPath}`);
+app.use(express.static(clientPath));
+app.get('*', (_req, res) => {
+  res.sendFile(path.join(clientPath, 'index.html'));
+});
 
 // ── Start Server ───────────────────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT || '8080', 10);
