@@ -293,34 +293,62 @@ async function individualSync(channel: Channel, products: ProductRow[], mappings
 }
 
 async function createShopifyProduct(channel: Channel, sku: string, mapped: Record<string, unknown>, withImages: boolean) {
+  // Step 1: Create product with basic fields using the new API (2024-10+)
   const createMutation = `
-    mutation productCreate($input: ProductInput!) {
-      productCreate(input: $input) {
-        product { id variants(first: 1) { edges { node { id sku } } } }
+    mutation productCreate($product: ProductCreateInput!, $media: [CreateMediaInput!]) {
+      productCreate(product: $product, media: $media) {
+        product { id variants(first: 1) { edges { node { id } } } }
         userErrors { field message }
       }
     }`;
 
-  const input: Record<string, unknown> = {
+  const product: Record<string, unknown> = {
     title: mapped.title || sku,
     descriptionHtml: mapped.body_html || '',
     vendor: mapped.vendor || '',
     tags: mapped.tags ? String(mapped.tags).split(',').map(t => t.trim()) : [],
     status: mapped.status ? String(mapped.status).toUpperCase() : 'DRAFT',
-    variants: [{
-      sku,
-      price: mapped.price || '0.00',
-      compareAtPrice: mapped.compare_at_price || null,
-      inventoryPolicy: 'DENY',
-      inventoryManagement: 'SHOPIFY',
-    }],
   };
 
+  // Media (images) via separate argument
+  const media: Array<{ originalSource: string; mediaContentType: string }> = [];
   if (withImages && mapped.image_url) {
-    input.images = [{ src: mapped.image_url }];
+    const urls = String(mapped.image_url).split(',').map(u => u.trim()).filter(Boolean);
+    for (const url of urls) {
+      media.push({ originalSource: url, mediaContentType: 'IMAGE' });
+    }
   }
 
-  await shopifyGraphQL(channel, createMutation, { input });
+  const result = await shopifyGraphQL(channel, createMutation, {
+    product,
+    media: media.length > 0 ? media : undefined,
+  }) as { productCreate: { product: { id: string; variants: { edges: Array<{ node: { id: string } }> } }; userErrors: Array<{ field: string; message: string }> } };
+
+  if (result.productCreate.userErrors?.length > 0) {
+    throw new Error(JSON.stringify(result.productCreate.userErrors));
+  }
+
+  const productId = result.productCreate.product?.id;
+  const variantId = result.productCreate.product?.variants?.edges?.[0]?.node?.id;
+
+  // Step 2: Update the default variant with SKU, price, inventory settings
+  if (variantId) {
+    const variantMutation = `
+      mutation productVariantUpdate($input: ProductVariantInput!) {
+        productVariantUpdate(input: $input) {
+          productVariant { id sku }
+          userErrors { field message }
+        }
+      }`;
+    await shopifyGraphQL(channel, variantMutation, {
+      input: {
+        id: variantId,
+        sku,
+        price: mapped.price || '0.00',
+        compareAtPrice: mapped.compare_at_price || null,
+      },
+    });
+  }
 }
 
 // ── Mapping Helper ─────────────────────────────────────────────────────────
