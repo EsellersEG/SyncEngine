@@ -273,7 +273,7 @@ async function individualSync(channel: Channel, products: ProductRow[], mappings
           }`;
         const input: Record<string, unknown> = { id: shopifyIds.productId };
         if (mapped.title) input.title = mapped.title;
-        if (mapped.body_html) input.bodyHtml = mapped.body_html;
+        if (mapped.body_html) input.descriptionHtml = mapped.body_html;
         if (mapped.tags) input.tags = String(mapped.tags).split(',').map(t => t.trim());
         if (mapped.vendor) input.vendor = mapped.vendor;
         if (mapped.status) input.status = String(mapped.status).toUpperCase();
@@ -303,7 +303,7 @@ async function createShopifyProduct(channel: Channel, sku: string, mapped: Recor
 
   const input: Record<string, unknown> = {
     title: mapped.title || sku,
-    bodyHtml: mapped.body_html || '',
+    descriptionHtml: mapped.body_html || '',
     vendor: mapped.vendor || '',
     tags: mapped.tags ? String(mapped.tags).split(',').map(t => t.trim()) : [],
     status: mapped.status ? String(mapped.status).toUpperCase() : 'DRAFT',
