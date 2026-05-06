@@ -62,7 +62,11 @@ router.get('/jobs', async (req, res) => {
   try {
     const { channel_id, feed_id, limit = '20' } = req.query;
     const result = await query(
-      `SELECT sj.*, u.name as triggered_by_name, ch.name as channel_name
+      `SELECT sj.id, sj.channel_id, sj.feed_id, sj.triggered_by, sj.preset, sj.fields,
+              sj.status, sj.total_products, sj.created_count, sj.updated_count,
+              sj.failed_count, sj.skipped_count, sj.started_at, sj.completed_at,
+              sj.error_message, sj.created_at,
+              u.name as triggered_by_name, ch.name as channel_name
        FROM sync_jobs sj
        LEFT JOIN users u ON sj.triggered_by = u.id
        LEFT JOIN channels ch ON sj.channel_id = ch.id
@@ -83,7 +87,11 @@ router.get('/jobs', async (req, res) => {
 router.get('/jobs/:id', async (req, res) => {
   try {
     const jobResult = await query(
-      `SELECT sj.*, u.name as triggered_by_name, ch.name as channel_name
+      `SELECT sj.id, sj.channel_id, sj.feed_id, sj.triggered_by, sj.preset, sj.fields,
+              sj.status, sj.total_products, sj.created_count, sj.updated_count,
+              sj.failed_count, sj.skipped_count, sj.started_at, sj.completed_at,
+              sj.error_message, sj.created_at,
+              u.name as triggered_by_name, ch.name as channel_name
        FROM sync_jobs sj
        LEFT JOIN users u ON sj.triggered_by = u.id
        LEFT JOIN channels ch ON sj.channel_id = ch.id

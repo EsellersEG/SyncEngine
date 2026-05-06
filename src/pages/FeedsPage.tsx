@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
-import { Plus, Database, RefreshCw, Eye, Trash2, AlertCircle } from 'lucide-react';
+import { Plus, Database, RefreshCw, Eye, Trash2, AlertCircle, Pencil } from 'lucide-react';
 
 interface Feed {
   id: string; client_id: string; name: string; spreadsheet_id: string;
@@ -18,6 +18,7 @@ export default function FeedsPage() {
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [editingFeed, setEditingFeed] = useState<Feed | null>(null);
   const [importing, setImporting] = useState<string | null>(null);
   const [form, setForm] = useState({ client_id: clientId || '', name: '', spreadsheet_id: '', sheet_name: 'Sheet1', header_row: 1 });
   const [error, setError] = useState('');
@@ -36,9 +37,15 @@ export default function FeedsPage() {
     e.preventDefault();
     setError('');
     try {
-      const newFeed = await api.post('/feeds', form) as Feed;
-      setFeeds(prev => [newFeed, ...prev]);
+      if (editingFeed) {
+        const updated = await api.patch(`/feeds/${editingFeed.id}`, form) as Feed;
+        setFeeds(prev => prev.map(f => f.id === editingFeed.id ? { ...f, ...updated } : f));
+      } else {
+        const newFeed = await api.post('/feeds', form) as Feed;
+        setFeeds(prev => [newFeed, ...prev]);
+      }
       setShowModal(false);
+      setEditingFeed(null);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed');
     }
@@ -71,6 +78,7 @@ export default function FeedsPage() {
           <p className="page-subtitle">Connect Google Sheets as product sources</p>
         </div>
         <button className="btn btn-primary" onClick={() => {
+          setEditingFeed(null);
           setForm({ client_id: clientId || '', name: '', spreadsheet_id: '', sheet_name: 'Sheet1', header_row: 1 });
           setError('');
           setShowModal(true);
@@ -90,6 +98,7 @@ export default function FeedsPage() {
             <p style={{ color: '#475569', fontSize: 16, fontWeight: 600, marginBottom: 8 }}>No feeds connected</p>
             <p style={{ color: '#334155', fontSize: 14, marginBottom: 24 }}>Add a Google Sheet to start importing products</p>
             <button className="btn btn-primary" onClick={() => {
+              setEditingFeed(null);
               setForm({ client_id: clientId || '', name: '', spreadsheet_id: '', sheet_name: 'Sheet1', header_row: 1 });
               setError('');
               setShowModal(true);
@@ -143,6 +152,14 @@ export default function FeedsPage() {
                           <RefreshCw size={12} className={importing === feed.id ? 'spinner' : ''} />
                           {importing === feed.id ? 'Importing...' : 'Import'}
                         </button>
+                        <button className="btn btn-secondary btn-sm btn-icon" onClick={() => {
+                          setEditingFeed(feed);
+                          setForm({ client_id: feed.client_id, name: feed.name, spreadsheet_id: feed.spreadsheet_id, sheet_name: feed.sheet_name, header_row: 1 });
+                          setError('');
+                          setShowModal(true);
+                        }} title="Edit feed">
+                          <Pencil size={12} />
+                        </button>
                         <button className="btn btn-danger btn-sm btn-icon" onClick={() => handleDelete(feed.id)} title="Delete feed">
                           <Trash2 size={12} />
                         </button>
@@ -160,8 +177,8 @@ export default function FeedsPage() {
       {showModal && (
         <div className="modal-backdrop" onClick={() => setShowModal(false)}>
           <div className="modal" onClick={e => e.stopPropagation()}>
-            <h2 style={{ fontSize: 18, fontWeight: 700, color: '#e2e8f0', marginBottom: 6 }}>Add Feed</h2>
-            <p style={{ fontSize: 13, color: '#64748b', marginBottom: 24 }}>Connect a Google Sheet as a product source</p>
+            <h2 style={{ fontSize: 18, fontWeight: 700, color: '#e2e8f0', marginBottom: 6 }}>{editingFeed ? 'Edit Feed' : 'Add Feed'}</h2>
+            <p style={{ fontSize: 13, color: '#64748b', marginBottom: 24 }}>{editingFeed ? 'Update feed configuration' : 'Connect a Google Sheet as a product source'}</p>
             <form onSubmit={handleCreate} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               <div className="form-group">
                 <label className="label">Client</label>
@@ -201,7 +218,7 @@ export default function FeedsPage() {
               {error && <div style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: '#f87171' }}>{error}</div>}
               <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
                 <button type="button" className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setShowModal(false)}>Cancel</button>
-                <button type="submit" className="btn btn-primary" style={{ flex: 1 }}>Add Feed</button>
+                <button type="submit" className="btn btn-primary" style={{ flex: 1 }}>{editingFeed ? 'Save Changes' : 'Add Feed'}</button>
               </div>
             </form>
           </div>

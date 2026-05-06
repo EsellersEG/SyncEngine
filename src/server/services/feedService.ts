@@ -15,8 +15,12 @@ interface FeedRecord {
   service_account_json: string;
 }
 
-function getAuthClient(serviceAccountJson: string) {
-  const credentials = JSON.parse(serviceAccountJson);
+function getAuthClient(serviceAccountJson?: string | null) {
+  const json = serviceAccountJson || process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  if (!json) {
+    throw new Error('No Google service account credentials found. Set GOOGLE_SERVICE_ACCOUNT_JSON environment variable or provide credentials per feed.');
+  }
+  const credentials = JSON.parse(json);
   const auth = new google.auth.GoogleAuth({
     credentials,
     scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
