@@ -18,13 +18,8 @@ export default function ClientDetailPage() {
 
   useEffect(() => {
     if (!id) return;
-    Promise.all([
-      api.get(`/clients/${id}`),
-      api.get(`/clients/${id}/stats`),
-    ]).then(([c, s]) => {
-      setClient(c as Client);
-      setStats(s as Stats);
-    }).catch(console.error);
+    api.get(`/clients/${id}`).then(c => setClient(c as Client)).catch(console.error);
+    api.get(`/clients/${id}/stats`).then(s => setStats(s as Stats)).catch(console.error);
   }, [id]);
 
   if (!client) return (

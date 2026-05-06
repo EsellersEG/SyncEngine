@@ -106,9 +106,9 @@ router.get('/:id/stats', async (req, res) => {
       query('SELECT COUNT(*) FROM channels WHERE client_id = $1', [req.params.id]),
       query('SELECT COUNT(*) FROM products WHERE client_id = $1', [req.params.id]),
       query(
-        `SELECT COUNT(*) FILTER (WHERE status='completed') as completed,
-                COUNT(*) FILTER (WHERE status='failed') as failed,
-                COUNT(*) FILTER (WHERE status='running') as running
+        `SELECT COUNT(*) FILTER (WHERE sj.status='completed') as completed,
+                COUNT(*) FILTER (WHERE sj.status='failed') as failed,
+                COUNT(*) FILTER (WHERE sj.status='running') as running
          FROM sync_jobs sj
          JOIN channels ch ON sj.channel_id = ch.id
          WHERE ch.client_id = $1`,

@@ -24,6 +24,8 @@ export default function ClientsPage() {
   const [form, setForm] = useState({ name: '', slug: '' });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [editClient, setEditClient] = useState<Client | null>(null);
+  const [editForm, setEditForm] = useState({ name: '', is_active: true });
 
   useEffect(() => {
     api.get('/clients').then((data: Client[]) => setClients(data))
@@ -129,7 +131,10 @@ export default function ClientsPage() {
                     <ExternalLink size={13} /> View Profile
                   </button>
                   {isAdmin && (
-                    <button className="btn btn-secondary btn-sm btn-icon" title="Edit">
+                    <button className="btn btn-secondary btn-sm btn-icon" title="Edit" onClick={() => {
+                      setEditClient(client);
+                      setEditForm({ name: client.name, is_active: client.is_active });
+                    }}>
                       <Pencil size={13} />
                     </button>
                   )}
@@ -139,6 +144,50 @@ export default function ClientsPage() {
           </div>
         )}
       </div>
+
+      {/* Edit Modal */}
+      {editClient && (
+        <div className="modal-backdrop" onClick={() => setEditClient(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h2 style={{ fontSize: 18, fontWeight: 700, color: '#e2e8f0', marginBottom: 6 }}>Edit Client</h2>
+            <p style={{ fontSize: 13, color: '#64748b', marginBottom: 24 }}>Update client profile</p>
+            <form onSubmit={async (e) => {
+              e.preventDefault();
+              setSaving(true);
+              setError('');
+              try {
+                const updated = await api.patch(`/clients/${editClient.id}`, editForm) as Client;
+                setClients(prev => prev.map(c => c.id === updated.id ? { ...c, ...updated } : c));
+                setEditClient(null);
+              } catch (err: unknown) {
+                setError(err instanceof Error ? err.message : 'Failed to update client');
+              } finally {
+                setSaving(false);
+              }
+            }} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <div className="form-group">
+                <label className="label">Client Name</label>
+                <input className="input" value={editForm.name}
+                  onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))} required autoFocus />
+              </div>
+              <div className="form-group">
+                <label className="label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <input type="checkbox" checked={editForm.is_active}
+                    onChange={e => setEditForm(f => ({ ...f, is_active: e.target.checked }))} />
+                  Active
+                </label>
+              </div>
+              {error && <div style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: '#f87171' }}>{error}</div>}
+              <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
+                <button type="button" className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setEditClient(null)}>Cancel</button>
+                <button type="submit" className="btn btn-primary" style={{ flex: 1 }} disabled={saving}>
+                  {saving ? 'Saving...' : 'Save Changes'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Create Modal */}
       {showModal && (
