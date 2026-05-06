@@ -43,12 +43,17 @@ app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', version: '1.0.0', timestamp: new Date().toISOString() });
 });
 
-// ── Serve Frontend in Production ───────────────────────────────────────────
-if (process.env.NODE_ENV === 'production') {
-  const clientPath = path.join(__dirname, 'dist/client');
+// ── Serve Frontend ───────────────────────────────────────────
+import fs from 'fs';
+const clientPath = path.join(process.cwd(), 'dist/client');
+if (fs.existsSync(clientPath)) {
   app.use(express.static(clientPath));
   app.get('*', (_req, res) => {
     res.sendFile(path.join(clientPath, 'index.html'));
+  });
+} else {
+  app.get('/', (_req, res) => {
+    res.send('API is running. Frontend build not found at ' + clientPath);
   });
 }
 
