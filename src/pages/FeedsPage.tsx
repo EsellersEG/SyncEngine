@@ -69,7 +69,11 @@ export default function FeedsPage() {
           <h1 className="page-title">Feeds</h1>
           <p className="page-subtitle">Connect Google Sheets as product sources</p>
         </div>
-        <button className="btn btn-primary" onClick={() => setShowModal(true)}>
+        <button className="btn btn-primary" onClick={() => {
+          setForm({ client_id: clientId || '', name: '', spreadsheet_id: '', sheet_name: 'Sheet1', header_row: 1 });
+          setError('');
+          setShowModal(true);
+        }}>
           <Plus size={15} /> Add Feed
         </button>
       </div>
@@ -84,7 +88,11 @@ export default function FeedsPage() {
             <Database size={40} color="#334155" style={{ margin: '0 auto 16px' }} />
             <p style={{ color: '#475569', fontSize: 16, fontWeight: 600, marginBottom: 8 }}>No feeds connected</p>
             <p style={{ color: '#334155', fontSize: 14, marginBottom: 24 }}>Add a Google Sheet to start importing products</p>
-            <button className="btn btn-primary" onClick={() => setShowModal(true)}>
+            <button className="btn btn-primary" onClick={() => {
+              setForm({ client_id: clientId || '', name: '', spreadsheet_id: '', sheet_name: 'Sheet1', header_row: 1 });
+              setError('');
+              setShowModal(true);
+            }}>
               <Plus size={15} /> Add First Feed
             </button>
           </div>

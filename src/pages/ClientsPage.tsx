@@ -55,7 +55,11 @@ export default function ClientsPage() {
           <p className="page-subtitle">Manage client profiles and their connected resources</p>
         </div>
         {isAdmin && (
-          <button className="btn btn-primary" onClick={() => setShowModal(true)}>
+          <button className="btn btn-primary" onClick={() => {
+            setForm({ name: '', slug: '' });
+            setError('');
+            setShowModal(true);
+          }}>
             <Plus size={15} /> New Client
           </button>
         )}
@@ -72,7 +76,11 @@ export default function ClientsPage() {
             <p style={{ color: '#475569', fontSize: 16, fontWeight: 600, marginBottom: 8 }}>No clients yet</p>
             <p style={{ color: '#334155', fontSize: 14, marginBottom: 24 }}>Create your first client profile to get started</p>
             {isAdmin && (
-              <button className="btn btn-primary" onClick={() => setShowModal(true)}>
+              <button className="btn btn-primary" onClick={() => {
+                setForm({ name: '', slug: '' });
+                setError('');
+                setShowModal(true);
+              }}>
                 <Plus size={15} /> Create First Client
               </button>
             )}

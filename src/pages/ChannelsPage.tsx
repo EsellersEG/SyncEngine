@@ -79,7 +79,14 @@ export default function ChannelsPage() {
           <h1 className="page-title">Channels</h1>
           <p className="page-subtitle">Manage Shopify stores and marketplace connections</p>
         </div>
-        <button className="btn btn-primary" onClick={() => setShowModal(true)}>
+        <button className="btn btn-primary" onClick={() => {
+          setForm({
+            client_id: '', name: '', type: 'shopify',
+            shopify_store_url: '', shopify_access_token: '', shopify_api_version: '2024-10',
+          });
+          setError('');
+          setShowModal(true);
+        }}>
           <Plus size={15} /> Add Channel
         </button>
       </div>
@@ -94,7 +101,14 @@ export default function ChannelsPage() {
             <GitBranch size={40} color="#334155" style={{ margin: '0 auto 16px' }} />
             <p style={{ color: '#475569', fontSize: 16, fontWeight: 600, marginBottom: 8 }}>No channels yet</p>
             <p style={{ color: '#334155', fontSize: 14, marginBottom: 24 }}>Connect a Shopify store or marketplace</p>
-            <button className="btn btn-primary" onClick={() => setShowModal(true)}><Plus size={15} /> Add Channel</button>
+            <button className="btn btn-primary" onClick={() => {
+              setForm({
+                client_id: '', name: '', type: 'shopify',
+                shopify_store_url: '', shopify_access_token: '', shopify_api_version: '2024-10',
+              });
+              setError('');
+              setShowModal(true);
+            }}><Plus size={15} /> Add Channel</button>
           </div>
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 20 }}>
