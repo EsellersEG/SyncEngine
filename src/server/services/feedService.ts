@@ -2,6 +2,7 @@ import { google } from 'googleapis';
 import crypto from 'crypto';
 import { query } from '../db.js';
 import { fetchOdooProducts, type OdooConfig } from './odooService.js';
+import { runSyncJob } from './shopifySyncService.js';
 
 // In-memory import progress tracking
 const importProgress: Map<string, { total: number; processed: number; status: 'running' | 'done' | 'error'; error?: string }> = new Map();
@@ -178,11 +179,69 @@ export async function importFeedProducts(feed: FeedRecord) {
     setTimeout(() => importProgress.delete(feed.id), 30000);
 
     console.log(`[FeedService] Import complete — created: ${created}, updated: ${updated}, skipped: ${skipped}`);
+
+    // Auto-sync changed products to Shopify if any were created or updated
+    if ((created > 0 || updated > 0) && feed.client_id) {
+      triggerAutoSync(feed).catch(err => {
+        console.error('[FeedService] Auto-sync trigger failed:', err);
+      });
+    }
+
     return { created, updated, skipped, total: rows.length };
   } catch (err) {
     const current = importProgress.get(feed.id);
     importProgress.set(feed.id, { total: current?.total || 0, processed: current?.processed || 0, status: 'error', error: String(err) });
     setTimeout(() => importProgress.delete(feed.id), 30000);
     throw err;
+  }
+}
+
+/**
+ * Auto-sync updated/created products to all Shopify channels for this client.
+ * Creates a sync job with preset 'sync_all' that will push changes to Shopify.
+ */
+async function triggerAutoSync(feed: FeedRecord) {
+  // Find all active Shopify channels for this client
+  const channelsResult = await query(
+    "SELECT * FROM channels WHERE client_id = $1 AND type = 'shopify' AND status = 'active'",
+    [feed.client_id]
+  );
+
+  if (channelsResult.rows.length === 0) {
+    console.log('[FeedService] No active Shopify channels for auto-sync');
+    return;
+  }
+
+  for (const channel of channelsResult.rows) {
+    // Check if there's already a running job for this channel
+    const running = await query(
+      "SELECT id FROM sync_jobs WHERE channel_id = $1 AND status = 'running'",
+      [channel.id]
+    );
+    if (running.rows.length > 0) {
+      console.log(`[FeedService] Auto-sync skipped for channel ${channel.name} — job already running`);
+      continue;
+    }
+
+    // Create a sync job
+    const jobResult = await query(
+      `INSERT INTO sync_jobs (channel_id, feed_id, preset, status)
+       VALUES ($1, $2, 'sync_all', 'pending')
+       RETURNING id`,
+      [channel.id, feed.id]
+    );
+    const jobId = jobResult.rows[0].id;
+
+    console.log(`[FeedService] Auto-sync triggered → Job ${jobId} for channel ${channel.name}`);
+
+    // Run async
+    runSyncJob({
+      jobId,
+      channel,
+      feedId: feed.id,
+      preset: 'sync_all',
+    }).catch(err => {
+      console.error(`[FeedService] Auto-sync job ${jobId} failed:`, err);
+    });
   }
 }

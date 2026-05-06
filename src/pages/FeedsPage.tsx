@@ -198,7 +198,11 @@ export default function FeedsPage() {
                       {feed.last_sync_at ? new Date(feed.last_sync_at).toLocaleString() : 'Never'}
                     </td>
                     <td style={{ fontSize: 12, color: '#94a3b8' }}>
-                      {feed.sync_interval_minutes ? `Every ${feed.sync_interval_minutes}m` : 'Manual'}
+                      {feed.sync_interval_minutes
+                        ? feed.sync_interval_minutes >= 60
+                          ? `Every ${feed.sync_interval_minutes / 60}h`
+                          : `Every ${feed.sync_interval_minutes}m`
+                        : 'Manual'}
                     </td>
                     <td>
                       <div style={{ display: 'flex', gap: 6 }}>
@@ -363,10 +367,12 @@ export default function FeedsPage() {
                 <label className="label">Auto-Import Interval</label>
                 <select className="input" value={form.sync_interval_minutes} onChange={e => setForm(f => ({ ...f, sync_interval_minutes: e.target.value }))}>
                   <option value="">Manual only</option>
-                  <option value="5">Every 5 minutes</option>
                   <option value="15">Every 15 minutes</option>
                   <option value="30">Every 30 minutes</option>
-                  <option value="60">Every hour</option>
+                  <option value="60">Every 1 hour</option>
+                  <option value="120">Every 2 hours</option>
+                  <option value="360">Every 6 hours</option>
+                  <option value="720">Every 12 hours</option>
                 </select>
               </div>
 
