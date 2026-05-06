@@ -11,9 +11,9 @@
     "dev:client": "vite",
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
     "build": "vite build",
-    "build:server": "esbuild server.ts --bundle --platform=node --outfile=dist/server.cjs --external:express --external:pg --external:dotenv --external:cors --external:googleapis --external:bcryptjs --external:jsonwebtoken --external:crypto-js",
+    "build:server": "esbuild server.ts --bundle --platform=node --format=esm --outfile=dist/server.js --external:express --external:pg --external:dotenv --external:cors --external:googleapis --external:bcryptjs --external:jsonwebtoken --external:crypto-js",
     "build:all": "npm run build && npm run build:server",
-    "start": "npm run db:init && node dist/server.cjs",
+    "start": "npm run db:init && node dist/server.js",
     "db:init": "node scripts/initDb.js"
   },
   "keywords": [
