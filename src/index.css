@@ -283,9 +283,8 @@ body { min-height: 100vh; }
   z-index: 1000;
   display: flex;
   justify-content: center;
-  align-items: flex-start;
+  align-items: center;
   padding: 24px;
-  overflow-y: auto;
 }
 .modal {
   background: #0d1224;
@@ -294,7 +293,7 @@ body { min-height: 100vh; }
   padding: 32px;
   width: 100%;
   max-width: 520px;
-  margin: auto;
+  max-height: calc(100vh - 48px);
   overflow-y: auto;
   box-shadow: 0 32px 128px rgba(0, 0, 0, 0.8);
   position: relative;
