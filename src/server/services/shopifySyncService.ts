@@ -81,7 +81,15 @@ async function getShopifyProductMap(channel: Channel): Promise<Map<string, { pro
       headers: { 'X-Shopify-Access-Token': channel.shopify_access_token },
     });
     const linkHeader = res.headers.get('Link');
-    const data = await res.json() as { products: Array<{ id: number; variants: Array<{ sku: string; id: number; inventory_item_id: number }> }> };
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Shopify API error (${res.status}): ${errText}`);
+    }
+    const data = await res.json() as { products?: Array<{ id: number; variants: Array<{ sku: string; id: number; inventory_item_id: number }> }> };
+
+    if (!data.products || !Array.isArray(data.products)) {
+      throw new Error(`Shopify returned unexpected response: ${JSON.stringify(data).slice(0, 200)}`);
+    }
 
     for (const product of data.products) {
       for (const variant of product.variants) {
