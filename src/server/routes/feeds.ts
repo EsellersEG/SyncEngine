@@ -96,6 +96,19 @@ router.post('/:id/import', async (req, res) => {
   }
 });
 
+// GET /api/feeds/:id/import-status — check import progress
+router.get('/:id/import-status', async (req, res) => {
+  try {
+    const { getImportProgress } = await import('../services/feedService.js');
+    const progress = getImportProgress(req.params.id);
+    if (!progress) return res.json({ status: 'idle' });
+    return res.json(progress);
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to get import status' });
+  }
+});
+
 // GET /api/feeds/:id/preview — preview first N rows from Google Sheets
 router.get('/:id/preview', async (req, res) => {
   try {

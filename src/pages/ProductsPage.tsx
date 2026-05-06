@@ -1,19 +1,27 @@
 import { useEffect, useState, useCallback } from 'react';
 import { api } from '../lib/api';
-import { Package, Search, RefreshCw } from 'lucide-react';
+import { Package, Search, RefreshCw, X } from 'lucide-react';
 
 interface Product {
   id: string; sku: string; feed_name: string; status: string;
   fingerprint: string; last_updated_at: string; raw_data: Record<string, string>;
+  client_id: string;
 }
+interface Client { id: string; name: string; }
+interface Feed { id: string; name: string; }
 
 export default function ProductsPage() {
   const [products, setProducts] = useState<Product[]>([]);
+  const [clients, setClients] = useState<Client[]>([]);
+  const [feeds, setFeeds] = useState<Feed[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [clientFilter, setClientFilter] = useState('');
+  const [feedFilter, setFeedFilter] = useState('');
   const [loading, setLoading] = useState(true);
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const limit = 50;
 
   useEffect(() => {
@@ -21,11 +29,23 @@ export default function ProductsPage() {
     return () => clearTimeout(t);
   }, [search]);
 
+  useEffect(() => {
+    Promise.all([
+      api.get('/clients'),
+      api.get('/feeds'),
+    ]).then(([c, f]) => {
+      setClients(c as Client[]);
+      setFeeds(f as Feed[]);
+    });
+  }, []);
+
   const fetchProducts = useCallback(async () => {
     setLoading(true);
     try {
       const params = new URLSearchParams({ page: String(page), limit: String(limit) });
       if (debouncedSearch) params.set('search', debouncedSearch);
+      if (clientFilter) params.set('client_id', clientFilter);
+      if (feedFilter) params.set('feed_id', feedFilter);
       const data = await api.get(`/products?${params}`) as { products: Product[]; total: number };
       setProducts(data.products);
       setTotal(data.total);
@@ -34,25 +54,44 @@ export default function ProductsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, debouncedSearch]);
+  }, [page, debouncedSearch, clientFilter, feedFilter]);
 
   useEffect(() => { fetchProducts(); }, [fetchProducts]);
 
   const totalPages = Math.ceil(total / limit);
 
   return (
+    <>
     <div className="animate-fade-in">
       <div className="page-header">
         <div>
           <h1 className="page-title">Products</h1>
           <p className="page-subtitle">{total.toLocaleString()} products imported from feeds</p>
         </div>
-        <div style={{ display: 'flex', gap: 10 }}>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <select
+            className="input"
+            style={{ width: 160, padding: '8px 12px' }}
+            value={clientFilter}
+            onChange={e => { setClientFilter(e.target.value); setPage(1); }}
+          >
+            <option value="">All Clients</option>
+            {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          <select
+            className="input"
+            style={{ width: 160, padding: '8px 12px' }}
+            value={feedFilter}
+            onChange={e => { setFeedFilter(e.target.value); setPage(1); }}
+          >
+            <option value="">All Feeds</option>
+            {feeds.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+          </select>
           <div style={{ position: 'relative' }}>
             <Search size={14} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#475569' }} />
             <input
               className="input"
-              style={{ paddingLeft: 34, width: 240 }}
+              style={{ paddingLeft: 34, width: 200 }}
               placeholder="Search by SKU..."
               value={search}
               onChange={e => { setSearch(e.target.value); setPage(1); }}
@@ -94,7 +133,7 @@ export default function ProductsPage() {
                 </thead>
                 <tbody>
                   {products.map(product => (
-                    <tr key={product.id}>
+                    <tr key={product.id} onClick={() => setSelectedProduct(product)} style={{ cursor: 'pointer' }}>
                       <td>
                         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 600, color: '#e2e8f0' }}>
                           {product.sku}
@@ -139,5 +178,52 @@ export default function ProductsPage() {
         )}
       </div>
     </div>
+
+    {/* Product Detail Modal */}
+    {selectedProduct && (
+      <div className="modal-backdrop" onClick={() => setSelectedProduct(null)}>
+        <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 640 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+            <div>
+              <h2 style={{ fontSize: 18, fontWeight: 700, color: '#e2e8f0', marginBottom: 4 }}>Product Details</h2>
+              <p style={{ fontSize: 13, color: '#64748b' }}>SKU: <span style={{ fontFamily: 'var(--font-mono)', color: '#94a3b8' }}>{selectedProduct.sku}</span></p>
+            </div>
+            <button className="btn btn-secondary btn-sm btn-icon" onClick={() => setSelectedProduct(null)}>
+              <X size={14} />
+            </button>
+          </div>
+          <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
+            <span className={`badge ${selectedProduct.status === 'active' ? 'badge-success' : 'badge-muted'}`}>
+              {selectedProduct.status}
+            </span>
+            <span className="badge badge-info">{selectedProduct.feed_name}</span>
+          </div>
+          <div style={{ maxHeight: 'calc(100vh - 280px)', overflowY: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead>
+                <tr>
+                  <th style={{ textAlign: 'left', padding: '8px 12px', background: 'rgba(13,18,36,0.8)', color: '#64748b', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid rgba(79,110,247,0.1)', position: 'sticky', top: 0 }}>Attribute</th>
+                  <th style={{ textAlign: 'left', padding: '8px 12px', background: 'rgba(13,18,36,0.8)', color: '#64748b', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid rgba(79,110,247,0.1)', position: 'sticky', top: 0 }}>Value</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(selectedProduct.raw_data || {}).map(([key, value]) => (
+                  <tr key={key}>
+                    <td style={{ padding: '8px 12px', borderBottom: '1px solid rgba(79,110,247,0.06)', color: '#94a3b8', fontWeight: 500, whiteSpace: 'nowrap', verticalAlign: 'top' }}>{key}</td>
+                    <td style={{ padding: '8px 12px', borderBottom: '1px solid rgba(79,110,247,0.06)', color: '#e2e8f0', wordBreak: 'break-word' }}>
+                      {String(value || '—')}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ marginTop: 16, fontSize: 11, color: '#475569' }}>
+            Last updated: {new Date(selectedProduct.last_updated_at).toLocaleString()}
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }

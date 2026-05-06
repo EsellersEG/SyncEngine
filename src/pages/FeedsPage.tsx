@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { Plus, Database, RefreshCw, Eye, Trash2, AlertCircle, Pencil } from 'lucide-react';
@@ -20,6 +20,8 @@ export default function FeedsPage() {
   const [showModal, setShowModal] = useState(false);
   const [editingFeed, setEditingFeed] = useState<Feed | null>(null);
   const [importing, setImporting] = useState<string | null>(null);
+  const [importProgress, setImportProgress] = useState<{ total: number; processed: number; status: string } | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [form, setForm] = useState({ client_id: clientId || '', name: '', spreadsheet_id: '', sheet_name: 'Sheet1', header_row: 1 });
   const [error, setError] = useState('');
 
@@ -53,12 +55,29 @@ export default function FeedsPage() {
 
   async function handleImport(feedId: string) {
     setImporting(feedId);
+    setImportProgress(null);
     try {
       await api.post(`/feeds/${feedId}/import`, {});
-      alert('Import started! Products will be updated shortly.');
+      // Start polling for progress
+      pollRef.current = setInterval(async () => {
+        try {
+          const progress = await api.get(`/feeds/${feedId}/import-status`) as { total: number; processed: number; status: string };
+          setImportProgress(progress);
+          if (progress.status === 'done' || progress.status === 'error' || progress.status === 'idle') {
+            clearInterval(pollRef.current!);
+            pollRef.current = null;
+            setImporting(null);
+            if (progress.status === 'done') {
+              // Refresh feeds list to update product count
+              const f = await api.get(`/feeds${clientId ? `?client_id=${clientId}` : ''}`) as Feed[];
+              setFeeds(f);
+            }
+            setTimeout(() => setImportProgress(null), 3000);
+          }
+        } catch { /* ignore */ }
+      }, 1000);
     } catch (err: unknown) {
       alert(err instanceof Error ? err.message : 'Import failed');
-    } finally {
       setImporting(null);
     }
   }
@@ -150,7 +169,9 @@ export default function FeedsPage() {
                           title="Import from sheet"
                         >
                           <RefreshCw size={12} className={importing === feed.id ? 'spinner' : ''} />
-                          {importing === feed.id ? 'Importing...' : 'Import'}
+                          {importing === feed.id && importProgress && importProgress.total > 0
+                            ? `${Math.round((importProgress.processed / importProgress.total) * 100)}%`
+                            : importing === feed.id ? 'Starting...' : 'Import'}
                         </button>
                         <button className="btn btn-secondary btn-sm btn-icon" onClick={() => {
                           setEditingFeed(feed);
@@ -164,6 +185,19 @@ export default function FeedsPage() {
                           <Trash2 size={12} />
                         </button>
                       </div>
+                      {importing === feed.id && importProgress && importProgress.total > 0 && (
+                        <div style={{ marginTop: 8 }}>
+                          <div className="progress-bar" style={{ height: 4 }}>
+                            <div className="progress-fill" style={{ width: `${Math.round((importProgress.processed / importProgress.total) * 100)}%` }} />
+                          </div>
+                          <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>
+                            {importProgress.processed.toLocaleString()} / {importProgress.total.toLocaleString()} products
+                          </div>
+                        </div>
+                      )}
+                      {importProgress?.status === 'done' && !importing && (
+                        <div style={{ marginTop: 6, fontSize: 12, color: '#4ade80' }}>✓ Import complete</div>
+                      )}
                     </td>
                   </tr>
                 ))}

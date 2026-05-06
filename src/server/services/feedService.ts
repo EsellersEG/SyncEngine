@@ -2,6 +2,13 @@ import { google } from 'googleapis';
 import crypto from 'crypto';
 import { query } from '../db.js';
 
+// In-memory import progress tracking
+const importProgress: Map<string, { total: number; processed: number; status: 'running' | 'done' | 'error'; error?: string }> = new Map();
+
+export function getImportProgress(feedId: string) {
+  return importProgress.get(feedId) || null;
+}
+
 interface FeedRow {
   [key: string]: string | number | null;
 }
@@ -76,63 +83,79 @@ function detectSkuColumn(headers: string[]): string | null {
 
 export async function importFeedProducts(feed: FeedRecord) {
   console.log(`[FeedService] Importing feed: ${feed.id}`);
-  const { headers, rows } = await fetchSheetData(feed);
+  importProgress.set(feed.id, { total: 0, processed: 0, status: 'running' });
 
-  const skuColumn = detectSkuColumn(headers);
-  if (!skuColumn) {
-    console.error(`[FeedService] No SKU column found in feed ${feed.id}`);
-    throw new Error('No SKU column found (looked for: sku, ean, barcode, product_id, id, asin)');
-  }
+  try {
+    const { headers, rows } = await fetchSheetData(feed);
 
-  let created = 0;
-  let updated = 0;
-  let skipped = 0;
-
-  for (const row of rows) {
-    const sku = String(row[skuColumn] || '').trim();
-    if (!sku) { skipped++; continue; }
-
-    const fingerprint = computeFingerprint(row);
-
-    try {
-      // Check if product exists
-      const existing = await query(
-        'SELECT id, fingerprint FROM products WHERE feed_id = $1 AND sku = $2',
-        [feed.id, sku]
-      );
-
-      if (existing.rows[0]) {
-        if (existing.rows[0].fingerprint === fingerprint) {
-          skipped++;
-          continue; // No change
-        }
-        // Update
-        await query(
-          `UPDATE products SET fingerprint = $1, raw_data = $2, last_updated_at = NOW()
-           WHERE id = $3`,
-          [fingerprint, JSON.stringify(row), existing.rows[0].id]
-        );
-        updated++;
-      } else {
-        // Insert
-        await query(
-          `INSERT INTO products (client_id, feed_id, sku, fingerprint, raw_data)
-           VALUES ($1, $2, $3, $4, $5)`,
-          [feed.client_id, feed.id, sku, fingerprint, JSON.stringify(row)]
-        );
-        created++;
-      }
-    } catch (err) {
-      console.error(`[FeedService] Error processing SKU ${sku}:`, err);
+    const skuColumn = detectSkuColumn(headers);
+    if (!skuColumn) {
+      console.error(`[FeedService] No SKU column found in feed ${feed.id}`);
+      importProgress.set(feed.id, { total: 0, processed: 0, status: 'error', error: 'No SKU column found' });
+      throw new Error('No SKU column found (looked for: sku, ean, barcode, product_id, id, asin)');
     }
+
+    importProgress.set(feed.id, { total: rows.length, processed: 0, status: 'running' });
+
+    let created = 0;
+    let updated = 0;
+    let skipped = 0;
+
+    for (const row of rows) {
+      const sku = String(row[skuColumn] || '').trim();
+      if (!sku) { skipped++; importProgress.set(feed.id, { total: rows.length, processed: created + updated + skipped, status: 'running' }); continue; }
+
+      const fingerprint = computeFingerprint(row);
+
+      try {
+        // Check if product exists
+        const existing = await query(
+          'SELECT id, fingerprint FROM products WHERE feed_id = $1 AND sku = $2',
+          [feed.id, sku]
+        );
+
+        if (existing.rows[0]) {
+          if (existing.rows[0].fingerprint === fingerprint) {
+            skipped++;
+          } else {
+            await query(
+              `UPDATE products SET fingerprint = $1, raw_data = $2, last_updated_at = NOW()
+               WHERE id = $3`,
+              [fingerprint, JSON.stringify(row), existing.rows[0].id]
+            );
+            updated++;
+          }
+        } else {
+          await query(
+            `INSERT INTO products (client_id, feed_id, sku, fingerprint, raw_data)
+             VALUES ($1, $2, $3, $4, $5)`,
+            [feed.client_id, feed.id, sku, fingerprint, JSON.stringify(row)]
+          );
+          created++;
+        }
+      } catch (err) {
+        console.error(`[FeedService] Error processing SKU ${sku}:`, err);
+      }
+
+      importProgress.set(feed.id, { total: rows.length, processed: created + updated + skipped, status: 'running' });
+    }
+
+    // Update feed metadata
+    await query(
+      'UPDATE feeds SET last_sync_at = NOW(), last_row_count = $1 WHERE id = $2',
+      [rows.length, feed.id]
+    );
+
+    importProgress.set(feed.id, { total: rows.length, processed: rows.length, status: 'done' });
+    // Clean up progress after 30 seconds
+    setTimeout(() => importProgress.delete(feed.id), 30000);
+
+    console.log(`[FeedService] Import complete — created: ${created}, updated: ${updated}, skipped: ${skipped}`);
+    return { created, updated, skipped, total: rows.length };
+  } catch (err) {
+    const current = importProgress.get(feed.id);
+    importProgress.set(feed.id, { total: current?.total || 0, processed: current?.processed || 0, status: 'error', error: String(err) });
+    setTimeout(() => importProgress.delete(feed.id), 30000);
+    throw err;
   }
-
-  // Update feed metadata
-  await query(
-    'UPDATE feeds SET last_sync_at = NOW(), last_row_count = $1 WHERE id = $2',
-    [rows.length, feed.id]
-  );
-
-  console.log(`[FeedService] Import complete — created: ${created}, updated: ${updated}, skipped: ${skipped}`);
-  return { created, updated, skipped, total: rows.length };
 }
