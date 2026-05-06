@@ -63,6 +63,7 @@ export default function FeedsPage() {
   }
 
   return (
+    <>
     <div className="animate-fade-in">
       <div className="page-header">
         <div>
@@ -154,6 +155,7 @@ export default function FeedsPage() {
           </div>
         )}
       </div>
+      </div>
 
       {showModal && (
         <div className="modal-backdrop" onClick={() => setShowModal(false)}>
@@ -205,6 +207,6 @@ export default function FeedsPage() {
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 }
