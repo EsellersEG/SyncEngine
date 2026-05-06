@@ -1,15 +1,11 @@
 # Sync-Engine on Railway
 
 [build]
-builder = "nixpacks"
-buildCommand = "npm install && npm run build:all"
-startCommand = "npm start"
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
 
 [deploy]
 healthcheckPath = "/api/health"
 healthcheckTimeout = 30
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 5
-
-[[services]]
-name = "web"
