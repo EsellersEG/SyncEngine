@@ -74,6 +74,7 @@ export default function SyncPage() {
   const [filterRules, setFilterRules] = useState<FilterRule[]>([]);
   const [feedHeaders, setFeedHeaders] = useState<string[]>([]);
   const [filterPreview, setFilterPreview] = useState<{ total: number; matched: number; filtered: number } | null>(null);
+  const [mappingCount, setMappingCount] = useState<number | null>(null);
 
   // History state
   const [historyJobs, setHistoryJobs] = useState<SyncJob[]>([]);
@@ -105,6 +106,17 @@ export default function SyncPage() {
       api.get(`/sync/feed-headers/${config.feed_id}`).then((r: { headers: string[] }) => setFeedHeaders(r.headers)).catch(() => {});
     }
   }, [config.feed_id]);
+
+  // Check mapping count when feed+channel are selected
+  useEffect(() => {
+    if (config.feed_id && config.channel_id) {
+      api.get(`/mappings?feed_id=${config.feed_id}&channel_id=${config.channel_id}`)
+        .then((m: unknown[]) => setMappingCount(m.length))
+        .catch(() => setMappingCount(null));
+    } else {
+      setMappingCount(null);
+    }
+  }, [config.feed_id, config.channel_id]);
 
   async function handleStart(e: React.FormEvent) {
     e.preventDefault();
@@ -576,6 +588,33 @@ export default function SyncPage() {
               <button type="button" className="btn btn-secondary btn-sm" onClick={() => setView('filter-rules')}>
                 <Filter size={12} /> Filter Rules {filterRules.length > 0 && `(${filterRules.length})`}
               </button>
+            )}
+
+            {/* No Mapping Warning */}
+            {mappingCount === 0 && config.feed_id && config.channel_id && (
+              <div style={{
+                background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)',
+                borderRadius: 10, padding: '12px 14px', display: 'flex', alignItems: 'flex-start', gap: 10,
+              }}>
+                <AlertTriangle size={16} color="#f59e0b" style={{ flexShrink: 0, marginTop: 2 }} />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: '#f59e0b' }}>No mappings configured</div>
+                  <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 3, marginBottom: 8 }}>
+                    Sync requires attribute mappings to know which columns map to which Shopify fields.
+                  </div>
+                  <button type="button" className="btn btn-sm" style={{ background: 'rgba(245,158,11,0.2)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.3)', fontSize: 12 }}
+                    onClick={async () => {
+                      try {
+                        const result = await api.post('/mappings/auto-map', { feed_id: config.feed_id, channel_id: config.channel_id }) as { count: number };
+                        setMappingCount(result.count);
+                        if (result.count > 0) alert(`✅ Auto-mapped ${result.count} columns!`);
+                        else alert('No matching columns found. Please map manually.');
+                      } catch { alert('Auto-map failed'); }
+                    }}>
+                    ⚡ Auto-Map Now
+                  </button>
+                </div>
+              </div>
             )}
 
             <button type="submit" className="btn btn-primary" disabled={starting || !config.channel_id || !config.feed_id || (config.preset === 'custom' && customFields.length === 0)} style={{ marginTop: 4 }}>

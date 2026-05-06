@@ -82,4 +82,68 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
+// POST /api/mappings/auto-map — auto-detect matching columns and create mappings
+router.post('/auto-map', async (req, res) => {
+  try {
+    const { feed_id, channel_id } = req.body;
+    if (!feed_id || !channel_id) {
+      return res.status(400).json({ error: 'feed_id and channel_id required' });
+    }
+
+    // Fetch feed headers from first product
+    const headerResult = await query(
+      'SELECT raw_data FROM products WHERE feed_id = $1 LIMIT 1',
+      [feed_id]
+    );
+    if (!headerResult.rows[0]) {
+      return res.status(400).json({ error: 'No products found in feed. Import the feed first.' });
+    }
+    const headers = Object.keys(headerResult.rows[0].raw_data);
+
+    // Auto-mapping rules: column name (lowercased) → target Shopify field
+    const AUTO_MAP: Record<string, string> = {
+      'title': 'title', 'body (html)': 'body_html', 'body_html': 'body_html', 'body html': 'body_html',
+      'description': 'body_html', 'vendor': 'vendor', 'tags': 'tags', 'status': 'status', 'handle': 'handle',
+      'product type': 'product_type', 'product_type': 'product_type',
+      'variant price': 'price', 'variant_price': 'price', 'price': 'price',
+      'variant compare at price': 'compare_at_price', 'variant_compare_at_price': 'compare_at_price',
+      'compare at price': 'compare_at_price',
+      'variant sku': 'sku', 'variant_sku': 'sku', 'sku': 'sku',
+      'variant barcode': 'barcode', 'variant_barcode': 'barcode', 'barcode': 'barcode',
+      'variant inventory qty': 'inventory_quantity', 'variant_inventory_qty': 'inventory_quantity',
+      'variant inventory quantity': 'inventory_quantity', 'inventory_quantity': 'inventory_quantity',
+      'quantity': 'inventory_quantity', 'stock': 'inventory_quantity',
+      'variant grams': 'weight', 'variant_grams': 'weight', 'weight': 'weight',
+      'image src': 'image_url', 'image_src': 'image_url', 'image url': 'image_url',
+    };
+
+    const mappings: Array<{ feed_column: string; target_field: string }> = [];
+    const usedTargets = new Set<string>();
+
+    for (const header of headers) {
+      const key = header.toLowerCase().trim();
+      const target = AUTO_MAP[key];
+      if (target && !usedTargets.has(target)) {
+        mappings.push({ feed_column: header, target_field: target });
+        usedTargets.add(target);
+      }
+    }
+
+    if (mappings.length === 0) {
+      return res.json({ success: true, count: 0, message: 'No matching columns found' });
+    }
+
+    // Delete existing and re-insert
+    await query('DELETE FROM attribute_mappings WHERE feed_id = $1 AND channel_id = $2', [feed_id, channel_id]);
+    const values = mappings.map((_, i) => `($${i * 4 + 1}, $${i * 4 + 2}, $${i * 4 + 3}, $${i * 4 + 4})`).join(', ');
+    const params = mappings.flatMap(m => [feed_id, channel_id, m.feed_column, m.target_field]);
+    await query(`INSERT INTO attribute_mappings (feed_id, channel_id, feed_column, target_field) VALUES ${values}`, params);
+
+    return res.json({ success: true, count: mappings.length, mappings });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to auto-map' });
+  }
+});
+
 export default router;

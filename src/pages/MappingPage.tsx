@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
-import { Map, Plus, Save, Trash2, ArrowRight } from 'lucide-react';
+import { Map, Plus, Save, Trash2, ArrowRight, Wand2, AlertTriangle } from 'lucide-react';
 
 interface Feed { id: string; name: string; }
 interface Channel { id: string; name: string; type: string; }
@@ -19,7 +19,83 @@ const SHOPIFY_FIELDS = [
   { value: 'barcode', label: 'Barcode / EAN', group: 'Inventory' },
   { value: 'weight', label: 'Weight (g)', group: 'Shipping' },
   { value: 'image_url', label: 'Main Image URL', group: 'Media' },
+  { value: 'handle', label: 'Handle (URL slug)', group: 'Product' },
+  { value: 'product_type', label: 'Product Type', group: 'Product' },
+  { value: 'published', label: 'Published', group: 'Product' },
+  { value: 'option1_name', label: 'Option1 Name', group: 'Variants' },
+  { value: 'option1_value', label: 'Option1 Value', group: 'Variants' },
+  { value: 'option2_name', label: 'Option2 Name', group: 'Variants' },
+  { value: 'option2_value', label: 'Option2 Value', group: 'Variants' },
+  { value: 'option3_name', label: 'Option3 Name', group: 'Variants' },
+  { value: 'option3_value', label: 'Option3 Value', group: 'Variants' },
+  { value: 'variant_weight_unit', label: 'Weight Unit', group: 'Shipping' },
+  { value: 'variant_inventory_policy', label: 'Inventory Policy', group: 'Inventory' },
+  { value: 'variant_fulfillment_service', label: 'Fulfillment Service', group: 'Inventory' },
+  { value: 'variant_requires_shipping', label: 'Requires Shipping', group: 'Shipping' },
+  { value: 'variant_image', label: 'Variant Image URL', group: 'Media' },
 ];
+
+// Maps common feed column names (lowercased) to target_field
+const AUTO_MAP_RULES: Record<string, string> = {
+  'title': 'title',
+  'body (html)': 'body_html',
+  'body_html': 'body_html',
+  'body html': 'body_html',
+  'description': 'body_html',
+  'vendor': 'vendor',
+  'tags': 'tags',
+  'status': 'status',
+  'handle': 'handle',
+  'product type': 'product_type',
+  'product_type': 'product_type',
+  'published': 'published',
+  'variant price': 'price',
+  'variant_price': 'price',
+  'price': 'price',
+  'variant compare at price': 'compare_at_price',
+  'variant_compare_at_price': 'compare_at_price',
+  'compare at price': 'compare_at_price',
+  'variant sku': 'sku',
+  'variant_sku': 'sku',
+  'sku': 'sku',
+  'variant barcode': 'barcode',
+  'variant_barcode': 'barcode',
+  'barcode': 'barcode',
+  'variant inventory qty': 'inventory_quantity',
+  'variant_inventory_qty': 'inventory_quantity',
+  'variant inventory quantity': 'inventory_quantity',
+  'inventory_quantity': 'inventory_quantity',
+  'quantity': 'inventory_quantity',
+  'stock': 'inventory_quantity',
+  'variant grams': 'weight',
+  'variant_grams': 'weight',
+  'weight': 'weight',
+  'image src': 'image_url',
+  'image_src': 'image_url',
+  'image url': 'image_url',
+  'option1 name': 'option1_name',
+  'option1_name': 'option1_name',
+  'option1 value': 'option1_value',
+  'option1_value': 'option1_value',
+  'option2 name': 'option2_name',
+  'option2_name': 'option2_name',
+  'option2 value': 'option2_value',
+  'option2_value': 'option2_value',
+  'option3 name': 'option3_name',
+  'option3_name': 'option3_name',
+  'option3 value': 'option3_value',
+  'option3_value': 'option3_value',
+  'variant weight unit': 'variant_weight_unit',
+  'variant_weight_unit': 'variant_weight_unit',
+  'variant inventory policy': 'variant_inventory_policy',
+  'variant_inventory_policy': 'variant_inventory_policy',
+  'variant fulfillment service': 'variant_fulfillment_service',
+  'variant_fulfillment_service': 'variant_fulfillment_service',
+  'variant requires shipping': 'variant_requires_shipping',
+  'variant_requires_shipping': 'variant_requires_shipping',
+  'variant image': 'variant_image',
+  'variant_image': 'variant_image',
+};
 
 export default function MappingPage() {
   const [feeds, setFeeds] = useState<Feed[]>([]);
@@ -50,10 +126,38 @@ export default function MappingPage() {
       const p = preview as { headers: string[] };
       const e = existing as { feed_column: string; target_field: string; transform?: string }[];
       setFeedHeaders(p.headers || []);
-      setMappings(e.length > 0 ? e : []);
+      if (e.length > 0) {
+        setMappings(e);
+      } else {
+        // Auto-map on first load when no mappings exist
+        const autoMapped = autoMapHeaders(p.headers || []);
+        setMappings(autoMapped);
+      }
     }).catch(console.error)
       .finally(() => setLoading(false));
   }, [selectedFeed, selectedChannel]);
+
+  function autoMapHeaders(headers: string[]): Mapping[] {
+    const result: Mapping[] = [];
+    const usedTargets = new Set<string>();
+    for (const header of headers) {
+      const key = header.toLowerCase().trim();
+      const target = AUTO_MAP_RULES[key];
+      if (target && !usedTargets.has(target)) {
+        result.push({ feed_column: header, target_field: target });
+        usedTargets.add(target);
+      }
+    }
+    return result;
+  }
+
+  function handleAutoMap() {
+    const autoMapped = autoMapHeaders(feedHeaders);
+    // Merge: keep existing mappings that are manual, add new auto-mapped ones
+    const existingTargets = new Set(mappings.map(m => m.target_field));
+    const newMappings = autoMapped.filter(m => !existingTargets.has(m.target_field));
+    setMappings(prev => [...prev, ...newMappings]);
+  }
 
   function addMapping() {
     setMappings(prev => [...prev, { feed_column: feedHeaders[0] || '', target_field: 'title' }]);
@@ -138,15 +242,25 @@ export default function MappingPage() {
                 {mappings.length} mapping{mappings.length !== 1 ? 's' : ''} configured
                 {feedHeaders.length > 0 && ` · ${feedHeaders.length} columns in feed`}
               </div>
-              <button className="btn btn-secondary btn-sm" onClick={addMapping}>
-                <Plus size={13} /> Add Mapping
-              </button>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="btn btn-secondary btn-sm" onClick={handleAutoMap} title="Auto-detect and map matching columns">
+                  <Wand2 size={13} /> Auto-Map
+                </button>
+                <button className="btn btn-secondary btn-sm" onClick={addMapping}>
+                  <Plus size={13} /> Add Mapping
+                </button>
+              </div>
             </div>
 
             {mappings.length === 0 ? (
               <div className="glass-card" style={{ padding: 48, textAlign: 'center' }}>
-                <p style={{ color: '#64748b', marginBottom: 16 }}>No mappings yet. Click "Add Mapping" to get started.</p>
-                <button className="btn btn-primary btn-sm" onClick={addMapping}><Plus size={13} /> Add First Mapping</button>
+                <AlertTriangle size={32} color="#f59e0b" style={{ margin: '0 auto 12px' }} />
+                <p style={{ color: '#f59e0b', fontWeight: 600, fontSize: 15, marginBottom: 8 }}>No mappings configured</p>
+                <p style={{ color: '#64748b', marginBottom: 16 }}>Sync will not work without mappings. Click "Auto-Map" to detect matching columns automatically.</p>
+                <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+                  <button className="btn btn-primary btn-sm" onClick={handleAutoMap}><Wand2 size={13} /> Auto-Map Columns</button>
+                  <button className="btn btn-secondary btn-sm" onClick={addMapping}><Plus size={13} /> Add Manually</button>
+                </div>
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
