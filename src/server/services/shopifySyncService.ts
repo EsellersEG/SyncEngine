@@ -22,6 +22,7 @@ interface SyncJobConfig {
   feedId: string;
   preset: 'price_stock_meta' | 'sync_all_no_images' | 'sync_all' | 'custom';
   fields?: string[];
+  filterRules?: Array<{ field: string; operator: string; value: string; logic?: string }>;
 }
 
 interface ProductRow {
@@ -280,9 +281,45 @@ async function logSyncEntry(jobId: string, sku: string, action: string, message:
   );
 }
 
+// ── Filter Rules Evaluator ─────────────────────────────────────────────────
+function evaluateFilterRules(rawData: Record<string, unknown>, rules: Array<{ field: string; operator: string; value: string; logic?: string }>): boolean {
+  if (!rules || rules.length === 0) return true;
+  let currentResult = true;
+  for (let i = 0; i < rules.length; i++) {
+    const rule = rules[i];
+    const fieldValue = String(rawData[rule.field] || '').toLowerCase();
+    const ruleValue = String(rule.value || '').toLowerCase();
+    let ruleMatches = false;
+    switch (rule.operator) {
+      case 'equals': ruleMatches = fieldValue === ruleValue; break;
+      case 'not_equals': ruleMatches = fieldValue !== ruleValue; break;
+      case 'contains': ruleMatches = fieldValue.includes(ruleValue); break;
+      case 'not_contains': ruleMatches = !fieldValue.includes(ruleValue); break;
+      case 'greater_than': ruleMatches = parseFloat(fieldValue) > parseFloat(ruleValue); break;
+      case 'less_than': ruleMatches = parseFloat(fieldValue) < parseFloat(ruleValue); break;
+      case 'greater_or_equal': ruleMatches = parseFloat(fieldValue) >= parseFloat(ruleValue); break;
+      case 'less_or_equal': ruleMatches = parseFloat(fieldValue) <= parseFloat(ruleValue); break;
+      case 'starts_with': ruleMatches = fieldValue.startsWith(ruleValue); break;
+      case 'ends_with': ruleMatches = fieldValue.endsWith(ruleValue); break;
+      case 'is_empty': ruleMatches = fieldValue === '' || fieldValue === 'null' || fieldValue === 'undefined'; break;
+      case 'is_not_empty': ruleMatches = fieldValue !== '' && fieldValue !== 'null' && fieldValue !== 'undefined'; break;
+      case 'equals_any': ruleMatches = ruleValue.split(/\s+/).some(v => fieldValue === v); break;
+      case 'not_equals_any': ruleMatches = !ruleValue.split(/\s+/).some(v => fieldValue === v); break;
+      default: ruleMatches = true;
+    }
+    if (rule.logic === 'or') {
+      if (currentResult) return true;
+      currentResult = ruleMatches;
+    } else {
+      currentResult = currentResult && ruleMatches;
+    }
+  }
+  return currentResult;
+}
+
 // ── Main Entry Point ───────────────────────────────────────────────────────
 export async function runSyncJob(config: SyncJobConfig) {
-  const { jobId, channel, feedId, preset } = config;
+  const { jobId, channel, feedId, preset, filterRules } = config;
 
   try {
     // Mark job as running
@@ -296,7 +333,13 @@ export async function runSyncJob(config: SyncJobConfig) {
       'SELECT sku, raw_data FROM products WHERE feed_id = $1 AND status = $2',
       [feedId, 'active']
     );
-    const products: ProductRow[] = productsResult.rows;
+    let products: ProductRow[] = productsResult.rows;
+
+    // Apply filter rules if provided
+    if (filterRules && filterRules.length > 0) {
+      products = products.filter(p => evaluateFilterRules(p.raw_data, filterRules));
+      console.log(`[SyncFlow] Filter rules applied: ${productsResult.rows.length} → ${products.length} products`);
+    }
 
     // Update total count
     await query('UPDATE sync_jobs SET total_products = $1 WHERE id = $2', [products.length, jobId]);

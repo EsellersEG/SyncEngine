@@ -1,7 +1,7 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { api } from '../lib/api';
 import { useAuth } from '../hooks/useAuth';
-import { Zap, Play, XCircle, RefreshCw, CheckCircle, AlertTriangle, Clock, ChevronDown, ChevronUp } from 'lucide-react';
+import { Zap, Play, XCircle, RefreshCw, CheckCircle, AlertTriangle, Clock, ChevronDown, ChevronUp, Plus, Trash2, Filter, ArrowLeft, Eye, Download } from 'lucide-react';
 
 interface Channel { id: string; name: string; type: string; client_id: string; }
 interface Feed { id: string; name: string; client_id: string; }
@@ -15,39 +15,48 @@ interface SyncJob {
 interface SyncLog {
   id: string; sku: string; action: string; message: string; created_at: string;
 }
+interface FilterRule {
+  field: string; operator: string; value: string; logic?: string;
+}
 
 const PRESETS = [
   { value: 'price_stock_meta', label: '⚡ Price + Stock + Meta', desc: 'Turbo Mode — ~5-10 min for 10K products' },
   { value: 'sync_all_no_images', label: '🔄 Sync All (No Images)', desc: 'Bulk Ops + Turbo — ~10-15 min' },
   { value: 'sync_all', label: '🚀 Sync All', desc: 'Full catalog sync — ~20-30 min' },
+  { value: 'custom', label: '⚙️ Custom', desc: 'Select specific fields to sync' },
 ];
 
-function StatusIcon({ status }: { status: string }) {
-  if (status === 'completed') return <CheckCircle size={14} color="#4ade80" />;
-  if (status === 'failed') return <AlertTriangle size={14} color="#f87171" />;
-  if (status === 'running') return <RefreshCw size={14} color="#60a5fa" className="spinner" />;
-  if (status === 'cancelled') return <XCircle size={14} color="#94a3b8" />;
-  return <Clock size={14} color="#fbbf24" />;
-}
+const CUSTOM_FIELDS = [
+  { value: 'stock', label: 'Stock' },
+  { value: 'price', label: 'Price' },
+  { value: 'tags', label: 'Tags' },
+  { value: 'status', label: 'Status' },
+  { value: 'images', label: 'Images' },
+  { value: 'metafields', label: 'Metafields' },
+  { value: 'title', label: 'Title' },
+  { value: 'body_html', label: 'Description' },
+  { value: 'vendor', label: 'Vendor' },
+  { value: 'product_type', label: 'Product Type' },
+];
 
-function ProgressBar({ job }: { job: SyncJob }) {
-  if (!job.total_products) return null;
-  const done = job.created_count + job.updated_count + job.failed_count;
-  const pct = Math.min(100, Math.round((done / job.total_products) * 100));
-  return (
-    <div style={{ marginTop: 8 }}>
-      <div className="progress-bar">
-        <div className="progress-fill" style={{ width: `${pct}%` }} />
-      </div>
-      <div style={{ display: 'flex', gap: 12, marginTop: 4, fontSize: 11 }}>
-        <span style={{ color: '#4ade80' }}>+{job.created_count} new</span>
-        <span style={{ color: '#60a5fa' }}>↻{job.updated_count} updated</span>
-        <span style={{ color: '#f87171' }}>✗{job.failed_count} failed</span>
-        <span style={{ color: '#64748b', marginLeft: 'auto' }}>{pct}%</span>
-      </div>
-    </div>
-  );
-}
+const OPERATORS = [
+  { value: 'equals', label: 'Equals' },
+  { value: 'not_equals', label: 'Not Equals' },
+  { value: 'greater_than', label: 'Greater Than' },
+  { value: 'less_than', label: 'Less Than' },
+  { value: 'greater_or_equal', label: 'Greater or Equal' },
+  { value: 'less_or_equal', label: 'Less or Equal' },
+  { value: 'contains', label: 'Contains' },
+  { value: 'not_contains', label: 'Not Contains' },
+  { value: 'equals_any', label: 'Equals Any (Multi-value)' },
+  { value: 'not_equals_any', label: 'Not Equals Any (Multi-value)' },
+  { value: 'starts_with', label: 'Starts With' },
+  { value: 'ends_with', label: 'Ends With' },
+  { value: 'is_empty', label: 'Is Empty' },
+  { value: 'is_not_empty', label: 'Is Not Empty' },
+];
+
+type View = 'main' | 'history' | 'validation' | 'filter-rules';
 
 export default function SyncPage() {
   const { user } = useAuth();
@@ -56,34 +65,58 @@ export default function SyncPage() {
   const [jobs, setJobs] = useState<SyncJob[]>([]);
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
-  const [expandedJob, setExpandedJob] = useState<string | null>(null);
-  const [jobLogs, setJobLogs] = useState<Record<string, SyncLog[]>>({});
+  const [view, setView] = useState<View>('main');
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const [config, setConfig] = useState({
-    channel_id: '', feed_id: '', preset: 'sync_all',
-  });
+  // Sync config
+  const [config, setConfig] = useState({ channel_id: '', feed_id: '', preset: 'sync_all' });
+  const [customFields, setCustomFields] = useState<string[]>([]);
+  const [filterRules, setFilterRules] = useState<FilterRule[]>([]);
+  const [feedHeaders, setFeedHeaders] = useState<string[]>([]);
+  const [filterPreview, setFilterPreview] = useState<{ total: number; matched: number; filtered: number } | null>(null);
+
+  // History state
+  const [historyJobs, setHistoryJobs] = useState<SyncJob[]>([]);
+
+  // Validation state
+  const [validationJobId, setValidationJobId] = useState('');
+  const [validationLogs, setValidationLogs] = useState<SyncLog[]>([]);
+  const [validationTotal, setValidationTotal] = useState(0);
+  const [validationPage, setValidationPage] = useState(1);
+  const [validationFilter, setValidationFilter] = useState('all');
+  const [validationCounts, setValidationCounts] = useState<Array<{ action: string; count: number }>>([]);
+  const [validationLoading, setValidationLoading] = useState(false);
 
   useEffect(() => {
-    Promise.all([api.get('/channels'), api.get('/feeds'), api.get('/sync/jobs?limit=20')])
-      .then(([ch, f, j]) => { setChannels(ch as Channel[]); setFeeds(f as Feed[]); setJobs(j as SyncJob[]); })
+    Promise.all([api.get('/channels'), api.get('/feeds'), api.get('/sync/jobs?limit=50')])
+      .then(([ch, f, j]) => { setChannels(ch as Channel[]); setFeeds(f as Feed[]); setJobs(j as SyncJob[]); setHistoryJobs(j as SyncJob[]); })
       .finally(() => setLoading(false));
 
-    // Poll for running jobs
     pollRef.current = setInterval(() => {
-      api.get('/sync/jobs?limit=20').then((j: SyncJob[]) => setJobs(j)).catch(() => {});
+      api.get('/sync/jobs?limit=50').then((j: unknown) => { setJobs(j as SyncJob[]); setHistoryJobs(j as SyncJob[]); }).catch(() => {});
     }, 5000);
 
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, []);
 
+  // Load feed headers when feed changes
+  useEffect(() => {
+    if (config.feed_id) {
+      api.get(`/sync/feed-headers/${config.feed_id}`).then((r: { headers: string[] }) => setFeedHeaders(r.headers)).catch(() => {});
+    }
+  }, [config.feed_id]);
+
   async function handleStart(e: React.FormEvent) {
     e.preventDefault();
     setStarting(true);
     try {
-      await api.post('/sync/start', config);
-      const updated = await api.get('/sync/jobs?limit=20') as SyncJob[];
+      const body: Record<string, unknown> = { ...config };
+      if (config.preset === 'custom') body.fields = customFields;
+      if (filterRules.length > 0) body.filter_rules = filterRules;
+      await api.post('/sync/start', body);
+      const updated = await api.get('/sync/jobs?limit=50') as SyncJob[];
       setJobs(updated);
+      setHistoryJobs(updated);
     } catch (err: unknown) {
       alert(err instanceof Error ? err.message : 'Failed to start sync');
     } finally {
@@ -96,30 +129,376 @@ export default function SyncPage() {
     setJobs(prev => prev.map(j => j.id === jobId ? { ...j, status: 'cancelled' } : j));
   }
 
-  async function toggleLogs(jobId: string) {
-    if (expandedJob === jobId) {
-      setExpandedJob(null);
-      return;
-    }
-    setExpandedJob(jobId);
-    if (!jobLogs[jobId]) {
-      const logs = await api.get(`/sync/jobs/${jobId}/logs`) as SyncLog[];
-      setJobLogs(prev => ({ ...prev, [jobId]: logs }));
-    }
+  async function previewFilter() {
+    try {
+      const result = await api.post('/sync/preview-filter', { feed_id: config.feed_id, filter_rules: filterRules }) as { total: number; matched: number; filtered: number };
+      setFilterPreview(result);
+    } catch { /* ignore */ }
+  }
+
+  const fetchValidationLogs = useCallback(async () => {
+    if (!validationJobId) return;
+    setValidationLoading(true);
+    try {
+      const params = new URLSearchParams({ page: String(validationPage), limit: '50' });
+      if (validationFilter !== 'all') params.set('action', validationFilter);
+      const result = await api.get(`/sync/jobs/${validationJobId}/logs?${params}`) as {
+        logs: SyncLog[]; total: number; counts: Array<{ action: string; count: number }>; page: number;
+      };
+      setValidationLogs(result.logs);
+      setValidationTotal(result.total);
+      setValidationCounts(result.counts);
+    } catch { /* ignore */ }
+    setValidationLoading(false);
+  }, [validationJobId, validationPage, validationFilter]);
+
+  useEffect(() => { fetchValidationLogs(); }, [fetchValidationLogs]);
+
+  function toggleCustomField(field: string) {
+    setCustomFields(prev => prev.includes(field) ? prev.filter(f => f !== field) : [...prev, field]);
+  }
+
+  function addRule() {
+    setFilterRules(prev => [...prev, { field: '', operator: 'equals', value: '' }]);
+  }
+
+  function updateRule(index: number, updates: Partial<FilterRule>) {
+    setFilterRules(prev => prev.map((r, i) => i === index ? { ...r, ...updates } : r));
+  }
+
+  function removeRule(index: number) {
+    setFilterRules(prev => prev.filter((_, i) => i !== index));
   }
 
   const shopifyChannels = channels.filter(ch => ch.type === 'shopify');
 
+  function getDuration(job: SyncJob): string {
+    if (!job.started_at) return '-';
+    const end = job.completed_at ? new Date(job.completed_at) : new Date();
+    const seconds = Math.round((end.getTime() - new Date(job.started_at).getTime()) / 1000);
+    return `${seconds}s`;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // VIEW: Filter Rules
+  // ─────────────────────────────────────────────────────────────────────────
+  if (view === 'filter-rules') {
+    return (
+      <>
+      <div className="animate-fade-in">
+        <div className="page-header">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <button className="btn btn-secondary btn-sm btn-icon" onClick={() => setView('main')}><ArrowLeft size={14} /></button>
+            <div>
+              <h1 className="page-title">Filter Rules</h1>
+              <p className="page-subtitle">Control which products are synced to Shopify</p>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 10 }}>
+            <button className="btn btn-secondary btn-sm" onClick={addRule}><Plus size={12} /> Add Rule</button>
+            <button className="btn btn-danger btn-sm" onClick={() => setFilterRules([])}>Clear All Rules</button>
+            <button className="btn btn-primary btn-sm" onClick={() => setView('main')}>Save Rules</button>
+          </div>
+        </div>
+        <div className="page-body">
+          {/* Info Box */}
+          <div className="glass-card" style={{ padding: 16, marginBottom: 20, borderColor: 'rgba(59,130,246,0.3)' }}>
+            <span style={{ fontSize: 13, color: '#94a3b8' }}>
+              <strong style={{ color: '#60a5fa' }}>How rules work:</strong> Only products that match ALL conditions will be synced to Shopify. Use OR between rules to create alternative conditions.
+            </span>
+          </div>
+
+          {/* Preview */}
+          {config.feed_id && (
+            <div className="glass-card" style={{ padding: 20, marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: '#e2e8f0', marginBottom: 12 }}>Products Preview</div>
+                <div style={{ display: 'flex', gap: 32 }}>
+                  <div>
+                    <div style={{ fontSize: 11, color: '#64748b' }}>Total in Sheet</div>
+                    <div style={{ fontSize: 24, fontWeight: 700, color: '#e2e8f0' }}>{filterPreview?.total?.toLocaleString() || '—'}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, color: '#64748b' }}>Will Be Synced</div>
+                    <div style={{ fontSize: 24, fontWeight: 700, color: '#60a5fa' }}>{filterPreview?.matched?.toLocaleString() || '—'}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, color: '#64748b' }}>Will Be Filtered Out</div>
+                    <div style={{ fontSize: 24, fontWeight: 700, color: '#f87171' }}>{filterPreview?.filtered?.toLocaleString() || '—'}</div>
+                  </div>
+                </div>
+              </div>
+              <button className="btn btn-secondary btn-sm" onClick={previewFilter}>Calculate Preview</button>
+            </div>
+          )}
+
+          {/* Active Rules */}
+          <div className="glass-card" style={{ padding: 20 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: '#e2e8f0', marginBottom: 16 }}>Active Rules ({filterRules.length})</div>
+            {filterRules.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: 32, color: '#475569', fontSize: 14 }}>
+                No filter rules — all products will be synced.
+                <div style={{ marginTop: 12 }}>
+                  <button className="btn btn-secondary btn-sm" onClick={addRule}><Plus size={12} /> Add Rule</button>
+                </div>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                {filterRules.map((rule, idx) => (
+                  <div key={idx} style={{ padding: 16, border: '1px solid rgba(79,110,247,0.2)', borderRadius: 12, background: 'rgba(13,18,36,0.5)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                      <span className="badge badge-info">Rule {idx + 1}</span>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        {idx > 0 && (
+                          <select className="input" style={{ width: 80, padding: '4px 8px', fontSize: 12 }}
+                            value={rule.logic || 'and'}
+                            onChange={e => updateRule(idx, { logic: e.target.value })}>
+                            <option value="and">AND</option>
+                            <option value="or">OR</option>
+                          </select>
+                        )}
+                        <button className="btn btn-danger btn-sm" style={{ padding: '4px 8px' }} onClick={() => removeRule(idx)}>
+                          <Trash2 size={12} /> Remove
+                        </button>
+                      </div>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+                      <div className="form-group">
+                        <label className="label">Field</label>
+                        <select className="input" value={rule.field} onChange={e => updateRule(idx, { field: e.target.value })}>
+                          <option value="">Select field...</option>
+                          {feedHeaders.map(h => <option key={h} value={h}>{h}</option>)}
+                        </select>
+                      </div>
+                      <div className="form-group">
+                        <label className="label">Operator</label>
+                        <select className="input" value={rule.operator} onChange={e => updateRule(idx, { operator: e.target.value })}>
+                          {OPERATORS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                        </select>
+                      </div>
+                      <div className="form-group">
+                        <label className="label">Value</label>
+                        <input className="input" placeholder="Enter value..."
+                          value={rule.value} onChange={e => updateRule(idx, { value: e.target.value })}
+                          disabled={rule.operator === 'is_empty' || rule.operator === 'is_not_empty'} />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                <button className="btn btn-secondary btn-sm" style={{ alignSelf: 'flex-start' }} onClick={addRule}><Plus size={12} /> Add Another Rule</button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+      </>
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // VIEW: Sync History
+  // ─────────────────────────────────────────────────────────────────────────
+  if (view === 'history') {
+    return (
+      <div className="animate-fade-in">
+        <div className="page-header">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <button className="btn btn-secondary btn-sm btn-icon" onClick={() => setView('main')}><ArrowLeft size={14} /></button>
+            <div>
+              <h1 className="page-title">Sync History</h1>
+              <p className="page-subtitle">View all product sync operations</p>
+            </div>
+          </div>
+        </div>
+        <div className="page-body">
+          <div className="glass-card" style={{ padding: 20 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: '#e2e8f0', marginBottom: 16 }}>
+              Recent Syncs ({historyJobs.length})
+            </div>
+            <div className="table-container">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Date & Time</th>
+                    <th>Status</th>
+                    <th>Sync Type</th>
+                    <th>Progress</th>
+                    <th>Created</th>
+                    <th>Updated</th>
+                    <th>Skipped</th>
+                    <th>Failed</th>
+                    <th>Duration</th>
+                    <th>Error</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {historyJobs.map(job => (
+                    <tr key={job.id}>
+                      <td style={{ fontSize: 12, color: '#94a3b8', whiteSpace: 'nowrap' }}>{new Date(job.created_at).toLocaleString()}</td>
+                      <td>
+                        <span className={`badge ${
+                          job.status === 'completed' ? 'badge-success' :
+                          job.status === 'failed' ? 'badge-danger' :
+                          job.status === 'running' ? 'badge-info' :
+                          job.status === 'pending' ? 'badge-warning' : 'badge-muted'
+                        }`}>{job.status === 'completed' && job.failed_count > 0 ? 'Partial' : job.status}</span>
+                      </td>
+                      <td><span className="badge badge-info">{job.preset === 'price_stock_meta' ? 'Price Only' : job.preset === 'sync_all_no_images' ? 'No Images' : job.preset === 'sync_all' ? 'Sync All' : 'Custom'}</span></td>
+                      <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: '#94a3b8' }}>
+                        {(job.created_count + job.updated_count + job.failed_count + job.skipped_count)}/{job.total_products}
+                      </td>
+                      <td style={{ fontSize: 13, color: '#4ade80' }}>{job.created_count}</td>
+                      <td style={{ fontSize: 13, color: '#60a5fa' }}>{job.updated_count}</td>
+                      <td style={{ fontSize: 13, color: '#94a3b8' }}>{job.skipped_count}</td>
+                      <td style={{ fontSize: 13, color: '#f87171' }}>{job.failed_count}</td>
+                      <td style={{ fontSize: 12, color: '#64748b' }}>{getDuration(job)}</td>
+                      <td style={{ fontSize: 11, color: '#f87171', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={job.error_message || ''}>
+                        {job.error_message ? job.error_message.slice(0, 30) : '-'}
+                      </td>
+                      <td>
+                        <button className="btn btn-secondary btn-sm" onClick={() => { setValidationJobId(job.id); setValidationPage(1); setView('validation'); }}>
+                          <Eye size={11} /> Details
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // VIEW: Sync Validation
+  // ─────────────────────────────────────────────────────────────────────────
+  if (view === 'validation') {
+    const totalPages = Math.ceil(validationTotal / 50);
+    const selectedJob = jobs.find(j => j.id === validationJobId);
+    return (
+      <div className="animate-fade-in">
+        <div className="page-header">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <button className="btn btn-secondary btn-sm btn-icon" onClick={() => setView('history')}><ArrowLeft size={14} /></button>
+            <div>
+              <h1 className="page-title">Sync Validation</h1>
+              <p className="page-subtitle">View detailed results for each product across all syncs</p>
+            </div>
+          </div>
+        </div>
+        <div className="page-body">
+          <div className="glass-card" style={{ padding: 20, marginBottom: 20 }}>
+            <div style={{ display: 'flex', gap: 16, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+              <div className="form-group" style={{ minWidth: 240 }}>
+                <label className="label">Sync Operation</label>
+                <select className="input" value={validationJobId} onChange={e => { setValidationJobId(e.target.value); setValidationPage(1); }}>
+                  <option value="">All Syncs</option>
+                  {jobs.map(j => (
+                    <option key={j.id} value={j.id}>
+                      {new Date(j.created_at).toLocaleString()} - {j.preset === 'price_stock_meta' ? 'PRICE' : 'ALL'}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="form-group" style={{ minWidth: 180 }}>
+                <label className="label">Status Filter</label>
+                <select className="input" value={validationFilter} onChange={e => { setValidationFilter(e.target.value); setValidationPage(1); }}>
+                  <option value="all">All Statuses</option>
+                  {validationCounts.map(c => (
+                    <option key={c.action} value={c.action}>{c.action.charAt(0).toUpperCase() + c.action.slice(1)} ({c.count})</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div style={{ marginTop: 12, display: 'flex', gap: 16, fontSize: 12 }}>
+              {validationCounts.map(c => (
+                <span key={c.action} style={{ color: c.action === 'created' ? '#4ade80' : c.action === 'updated' ? '#60a5fa' : c.action === 'failed' ? '#f87171' : '#94a3b8' }}>
+                  {c.action.charAt(0).toUpperCase() + c.action.slice(1)}: {c.count}
+                </span>
+              ))}
+            </div>
+            <div style={{ fontSize: 12, color: '#64748b', marginTop: 8 }}>
+              Showing {validationLogs.length > 0 ? `${(validationPage - 1) * 50 + 1}-${Math.min(validationPage * 50, validationTotal)}` : '0'} of {validationTotal} results
+            </div>
+          </div>
+
+          <div className="table-container">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>SKU</th>
+                  <th>Status</th>
+                  <th>Action</th>
+                  <th>Message</th>
+                  <th>Date & Time</th>
+                </tr>
+              </thead>
+              <tbody>
+                {validationLoading ? (
+                  <tr><td colSpan={5} style={{ textAlign: 'center', padding: 40 }}>
+                    <div className="spinner" style={{ width: 24, height: 24, border: '3px solid rgba(79,110,247,0.2)', borderTopColor: '#4f6ef7', borderRadius: '50%', margin: '0 auto' }} />
+                  </td></tr>
+                ) : validationLogs.length === 0 ? (
+                  <tr><td colSpan={5} style={{ textAlign: 'center', padding: 40, color: '#475569' }}>No logs found</td></tr>
+                ) : validationLogs.map(log => (
+                  <tr key={log.id}>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 600, color: '#e2e8f0' }}>{log.sku}</td>
+                    <td>
+                      <span className={`badge ${
+                        log.action === 'created' || log.action === 'updated' ? 'badge-success' :
+                        log.action === 'failed' ? 'badge-danger' : 'badge-muted'
+                      }`}>
+                        {log.action === 'created' || log.action === 'updated' ? 'Success' : log.action === 'failed' ? 'Failed' : 'Skipped'}
+                      </span>
+                    </td>
+                    <td><span className="badge badge-info">{log.action.charAt(0).toUpperCase() + log.action.slice(1)}</span></td>
+                    <td style={{ fontSize: 12, color: '#64748b', maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={log.message}>{log.message || '-'}</td>
+                    <td style={{ fontSize: 12, color: '#94a3b8', whiteSpace: 'nowrap' }}>{new Date(log.created_at).toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {totalPages > 1 && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 16 }}>
+              <span style={{ fontSize: 13, color: '#64748b' }}>Page {validationPage} of {totalPages}</span>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button className="btn btn-secondary btn-sm" disabled={validationPage === 1} onClick={() => setValidationPage(p => p - 1)}>← Prev</button>
+                <button className="btn btn-secondary btn-sm" disabled={validationPage === totalPages} onClick={() => setValidationPage(p => p + 1)}>Next →</button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // VIEW: Main (Start Sync + Job List)
+  // ─────────────────────────────────────────────────────────────────────────
   return (
+    <>
     <div className="animate-fade-in">
       <div className="page-header">
         <div>
           <h1 className="page-title">Sync Jobs</h1>
           <p className="page-subtitle">Manage and monitor synchronization between feeds and channels</p>
         </div>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button className="btn btn-secondary btn-sm" onClick={() => setView('history')}>
+            <Clock size={13} /> Sync History
+          </button>
+          <button className="btn btn-secondary btn-sm" onClick={() => setView('validation')}>
+            <Eye size={13} /> Sync Validation
+          </button>
+        </div>
       </div>
 
-      <div className="page-body" style={{ display: 'grid', gridTemplateColumns: '360px 1fr', gap: 24, alignItems: 'flex-start' }}>
+      <div className="page-body" style={{ display: 'grid', gridTemplateColumns: '380px 1fr', gap: 24, alignItems: 'flex-start' }}>
         {/* Start Sync Panel */}
         <div className="glass-card" style={{ padding: 24 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 24 }}>
@@ -139,9 +518,6 @@ export default function SyncPage() {
                 <option value="">Select channel...</option>
                 {shopifyChannels.map(ch => <option key={ch.id} value={ch.id}>{ch.name}</option>)}
               </select>
-              {shopifyChannels.length === 0 && (
-                <span style={{ fontSize: 11, color: '#f87171', marginTop: 4 }}>No Shopify channels found. Add one first.</span>
-              )}
             </div>
             <div className="form-group">
               <label className="label">Feed</label>
@@ -159,7 +535,7 @@ export default function SyncPage() {
                   display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', borderRadius: 10,
                   border: `1px solid ${config.preset === p.value ? 'rgba(79,110,247,0.4)' : 'rgba(79,110,247,0.1)'}`,
                   background: config.preset === p.value ? 'rgba(79,110,247,0.08)' : 'transparent',
-                  cursor: 'pointer', marginBottom: 8, transition: 'all 0.2s',
+                  cursor: 'pointer', marginBottom: 6, transition: 'all 0.2s',
                 }}>
                   <input type="radio" name="preset" value={p.value}
                     checked={config.preset === p.value}
@@ -174,7 +550,35 @@ export default function SyncPage() {
               ))}
             </div>
 
-            <button type="submit" className="btn btn-primary" disabled={starting || !config.channel_id || !config.feed_id} style={{ marginTop: 4 }}>
+            {/* Custom Fields */}
+            {config.preset === 'custom' && (
+              <div className="form-group">
+                <label className="label">Or select specific fields to sync:</label>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {CUSTOM_FIELDS.map(f => (
+                    <label key={f.value} style={{
+                      display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: 8, fontSize: 12,
+                      border: `1px solid ${customFields.includes(f.value) ? 'rgba(79,110,247,0.4)' : 'rgba(79,110,247,0.1)'}`,
+                      background: customFields.includes(f.value) ? 'rgba(79,110,247,0.1)' : 'transparent',
+                      cursor: 'pointer', color: customFields.includes(f.value) ? '#e2e8f0' : '#94a3b8',
+                    }}>
+                      <input type="checkbox" checked={customFields.includes(f.value)} onChange={() => toggleCustomField(f.value)}
+                        style={{ accentColor: '#4f6ef7' }} />
+                      {f.label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Filter Rules Button */}
+            {config.feed_id && (
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => setView('filter-rules')}>
+                <Filter size={12} /> Filter Rules {filterRules.length > 0 && `(${filterRules.length})`}
+              </button>
+            )}
+
+            <button type="submit" className="btn btn-primary" disabled={starting || !config.channel_id || !config.feed_id || (config.preset === 'custom' && customFields.length === 0)} style={{ marginTop: 4 }}>
               {starting ? (
                 <span className="spinner" style={{ width: 14, height: 14, border: '2px solid rgba(255,255,255,0.3)', borderTopColor: 'white', borderRadius: '50%', display: 'inline-block' }} />
               ) : <Play size={14} />}
@@ -183,9 +587,9 @@ export default function SyncPage() {
           </form>
         </div>
 
-        {/* Jobs History */}
+        {/* Active/Recent Jobs */}
         <div>
-          <div style={{ fontSize: 16, fontWeight: 700, color: '#e2e8f0', marginBottom: 16 }}>Sync History</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: '#e2e8f0', marginBottom: 16 }}>Recent Jobs</div>
           {loading ? (
             <div style={{ textAlign: 'center', paddingTop: 40 }}>
               <div className="spinner" style={{ width: 28, height: 28, border: '3px solid rgba(79,110,247,0.2)', borderTopColor: '#4f6ef7', borderRadius: '50%', margin: '0 auto' }} />
@@ -197,70 +601,48 @@ export default function SyncPage() {
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              {jobs.map(job => (
-                <div key={job.id} className="glass-card" style={{ padding: 0, overflow: 'hidden' }}>
-                  <div style={{ padding: '16px 20px' }}>
-                    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                        <StatusIcon status={job.status} />
-                        <div>
-                          <div style={{ fontSize: 14, fontWeight: 600, color: '#e2e8f0' }}>{job.channel_name}</div>
-                          <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
-                            <span style={{ fontFamily: 'var(--font-mono)' }}>{job.preset}</span>
-                            {' · '}{new Date(job.created_at).toLocaleString()}
-                            {job.triggered_by_name && ` · by ${job.triggered_by_name}`}
-                          </div>
+              {jobs.slice(0, 10).map(job => (
+                <div key={job.id} className="glass-card" style={{ padding: '16px 20px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      {job.status === 'completed' ? <CheckCircle size={14} color="#4ade80" /> :
+                       job.status === 'failed' ? <AlertTriangle size={14} color="#f87171" /> :
+                       job.status === 'running' ? <RefreshCw size={14} color="#60a5fa" className="spinner" /> :
+                       <Clock size={14} color="#fbbf24" />}
+                      <div>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: '#e2e8f0' }}>{job.channel_name}</div>
+                        <div style={{ fontSize: 11, color: '#64748b' }}>
+                          {job.preset} · {new Date(job.created_at).toLocaleString()}
                         </div>
                       </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <span className={`badge ${
-                          job.status === 'completed' ? 'badge-success' :
-                          job.status === 'failed' ? 'badge-danger' :
-                          job.status === 'running' ? 'badge-info' :
-                          job.status === 'pending' ? 'badge-warning' : 'badge-muted'
-                        }`}>{job.status}</span>
-                        {(job.status === 'running' || job.status === 'pending') && (
-                          <button className="btn btn-danger btn-sm" onClick={() => handleCancel(job.id)}>
-                            <XCircle size={12} /> Cancel
-                          </button>
-                        )}
-                        <button
-                          className="btn btn-secondary btn-sm btn-icon"
-                          onClick={() => toggleLogs(job.id)}
-                          title={expandedJob === job.id ? 'Hide logs' : 'Show logs'}
-                        >
-                          {expandedJob === job.id ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-                        </button>
-                      </div>
                     </div>
-                    <ProgressBar job={job} />
-                    {job.error_message && (
-                      <div style={{ marginTop: 8, padding: '8px 12px', background: 'rgba(239,68,68,0.1)', borderRadius: 6, fontSize: 12, color: '#f87171' }}>
-                        {job.error_message}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Logs panel */}
-                  {expandedJob === job.id && (
-                    <div style={{ borderTop: '1px solid rgba(79,110,247,0.1)', padding: '12px 20px', background: 'rgba(8,12,24,0.5)', maxHeight: 300, overflowY: 'auto' }}>
-                      <div style={{ fontSize: 11, fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>
-                        Sync Logs ({jobLogs[job.id]?.length || 0} entries)
-                      </div>
-                      {(jobLogs[job.id] || []).length === 0 ? (
-                        <div style={{ fontSize: 13, color: '#475569' }}>No logs available yet.</div>
-                      ) : (
-                        (jobLogs[job.id] || []).map(log => (
-                          <div key={log.id} style={{ display: 'flex', gap: 8, fontSize: 12, padding: '3px 0', borderBottom: '1px solid rgba(79,110,247,0.05)' }}>
-                            <span style={{
-                              color: log.action === 'created' ? '#4ade80' : log.action === 'updated' ? '#60a5fa' : log.action === 'failed' ? '#f87171' : '#94a3b8',
-                              fontWeight: 600, minWidth: 60
-                            }}>{log.action}</span>
-                            <span style={{ color: '#94a3b8', fontFamily: 'var(--font-mono)', minWidth: 100 }}>{log.sku}</span>
-                            <span style={{ color: '#64748b' }}>{log.message}</span>
-                          </div>
-                        ))
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span className={`badge ${
+                        job.status === 'completed' ? 'badge-success' :
+                        job.status === 'failed' ? 'badge-danger' :
+                        job.status === 'running' ? 'badge-info' : 'badge-muted'
+                      }`}>{job.status}</span>
+                      {(job.status === 'running' || job.status === 'pending') && (
+                        <button className="btn btn-danger btn-sm" style={{ padding: '4px 8px' }} onClick={() => handleCancel(job.id)}>
+                          <XCircle size={11} />
+                        </button>
                       )}
+                      <button className="btn btn-secondary btn-sm" style={{ padding: '4px 8px' }} onClick={() => { setValidationJobId(job.id); setValidationPage(1); setView('validation'); }}>
+                        <Eye size={11} />
+                      </button>
+                    </div>
+                  </div>
+                  {job.total_products > 0 && (
+                    <div style={{ marginTop: 8 }}>
+                      <div className="progress-bar">
+                        <div className="progress-fill" style={{ width: `${Math.min(100, Math.round(((job.created_count + job.updated_count + job.failed_count) / job.total_products) * 100))}%` }} />
+                      </div>
+                      <div style={{ display: 'flex', gap: 10, marginTop: 4, fontSize: 11 }}>
+                        <span style={{ color: '#4ade80' }}>+{job.created_count}</span>
+                        <span style={{ color: '#60a5fa' }}>↻{job.updated_count}</span>
+                        <span style={{ color: '#f87171' }}>✗{job.failed_count}</span>
+                        <span style={{ color: '#64748b', marginLeft: 'auto' }}>{job.created_count + job.updated_count + job.failed_count}/{job.total_products}</span>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -270,5 +652,6 @@ export default function SyncPage() {
         </div>
       </div>
     </div>
+    </>
   );
 }

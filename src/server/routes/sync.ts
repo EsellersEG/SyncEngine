@@ -9,7 +9,7 @@ router.use(authenticate);
 // POST /api/sync/start — kick off a sync job
 router.post('/start', async (req: AuthRequest, res) => {
   try {
-    const { channel_id, feed_id, preset = 'sync_all', fields } = req.body;
+    const { channel_id, feed_id, preset = 'sync_all', fields, filter_rules } = req.body;
     if (!channel_id || !feed_id) {
       return res.status(400).json({ error: 'channel_id and feed_id required' });
     }
@@ -46,7 +46,7 @@ router.post('/start', async (req: AuthRequest, res) => {
     res.json({ jobId, status: 'pending', message: 'Sync job started' });
 
     // Run async (don't await)
-    runSyncJob({ jobId, channel, feedId: feed_id, preset, fields }).catch(err => {
+    runSyncJob({ jobId, channel, feedId: feed_id, preset, fields, filterRules: filter_rules }).catch(err => {
       console.error(`[SyncRoute] Job ${jobId} crashed:`, err);
     });
 
@@ -132,15 +132,133 @@ router.post('/jobs/:id/cancel', async (req, res) => {
 // GET /api/sync/jobs/:id/logs — streaming logs
 router.get('/jobs/:id/logs', async (req, res) => {
   try {
+    const { page = '1', limit = '50', action } = req.query;
+    const offset = (parseInt(page as string) - 1) * parseInt(limit as string);
+    
+    let whereClause = 'WHERE job_id = $1';
+    const params: unknown[] = [req.params.id];
+    
+    if (action && action !== 'all') {
+      whereClause += ` AND action = $${params.length + 1}`;
+      params.push(action);
+    }
+    
     const result = await query(
-      'SELECT * FROM sync_logs WHERE job_id = $1 ORDER BY created_at ASC',
+      `SELECT * FROM sync_logs ${whereClause} ORDER BY created_at ASC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      [...params, parseInt(limit as string), offset]
+    );
+    
+    const countResult = await query(
+      `SELECT COUNT(*) FROM sync_logs ${whereClause}`,
+      params
+    );
+    
+    // Get action counts
+    const countsResult = await query(
+      `SELECT action, COUNT(*)::int as count FROM sync_logs WHERE job_id = $1 GROUP BY action`,
       [req.params.id]
     );
-    return res.json(result.rows);
+    
+    return res.json({
+      logs: result.rows,
+      total: parseInt(countResult.rows[0].count),
+      counts: countsResult.rows,
+      page: parseInt(page as string),
+      limit: parseInt(limit as string),
+    });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Failed to fetch logs' });
   }
 });
+
+// POST /api/sync/preview-filter — preview how many products match filter rules
+router.post('/preview-filter', async (req, res) => {
+  try {
+    const { feed_id, filter_rules } = req.body;
+    if (!feed_id) return res.status(400).json({ error: 'feed_id required' });
+    
+    const productsResult = await query(
+      'SELECT raw_data FROM products WHERE feed_id = $1 AND status = $2',
+      [feed_id, 'active']
+    );
+    
+    const total = productsResult.rows.length;
+    let matched = 0;
+    
+    if (!filter_rules || filter_rules.length === 0) {
+      matched = total;
+    } else {
+      for (const row of productsResult.rows) {
+        if (evaluateRules(row.raw_data, filter_rules)) {
+          matched++;
+        }
+      }
+    }
+    
+    return res.json({ total, matched, filtered: total - matched });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to preview filter' });
+  }
+});
+
+// GET /api/sync/feed-headers/:feedId — get column headers for filter rules
+router.get('/feed-headers/:feedId', async (req, res) => {
+  try {
+    const result = await query(
+      'SELECT raw_data FROM products WHERE feed_id = $1 LIMIT 1',
+      [req.params.feedId]
+    );
+    if (!result.rows[0]) return res.json({ headers: [] });
+    const headers = Object.keys(result.rows[0].raw_data);
+    return res.json({ headers });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to fetch headers' });
+  }
+});
+
+// Helper: evaluate filter rules against product raw_data
+function evaluateRules(rawData: Record<string, unknown>, rules: Array<{ field: string; operator: string; value: string; logic?: string }>): boolean {
+  if (!rules || rules.length === 0) return true;
+  
+  // Group by OR logic: rules with logic='or' start a new group
+  let currentResult = true;
+  
+  for (let i = 0; i < rules.length; i++) {
+    const rule = rules[i];
+    const fieldValue = String(rawData[rule.field] || '').toLowerCase();
+    const ruleValue = String(rule.value || '').toLowerCase();
+    let ruleMatches = false;
+    
+    switch (rule.operator) {
+      case 'equals': ruleMatches = fieldValue === ruleValue; break;
+      case 'not_equals': ruleMatches = fieldValue !== ruleValue; break;
+      case 'contains': ruleMatches = fieldValue.includes(ruleValue); break;
+      case 'not_contains': ruleMatches = !fieldValue.includes(ruleValue); break;
+      case 'greater_than': ruleMatches = parseFloat(fieldValue) > parseFloat(ruleValue); break;
+      case 'less_than': ruleMatches = parseFloat(fieldValue) < parseFloat(ruleValue); break;
+      case 'greater_or_equal': ruleMatches = parseFloat(fieldValue) >= parseFloat(ruleValue); break;
+      case 'less_or_equal': ruleMatches = parseFloat(fieldValue) <= parseFloat(ruleValue); break;
+      case 'starts_with': ruleMatches = fieldValue.startsWith(ruleValue); break;
+      case 'ends_with': ruleMatches = fieldValue.endsWith(ruleValue); break;
+      case 'is_empty': ruleMatches = fieldValue === '' || fieldValue === 'null' || fieldValue === 'undefined'; break;
+      case 'is_not_empty': ruleMatches = fieldValue !== '' && fieldValue !== 'null' && fieldValue !== 'undefined'; break;
+      case 'equals_any': ruleMatches = ruleValue.split(/\s+/).some(v => fieldValue === v); break;
+      case 'not_equals_any': ruleMatches = !ruleValue.split(/\s+/).some(v => fieldValue === v); break;
+      default: ruleMatches = true;
+    }
+    
+    if (rule.logic === 'or') {
+      if (currentResult) return true; // previous AND group passed
+      currentResult = ruleMatches;
+    } else {
+      currentResult = currentResult && ruleMatches;
+    }
+  }
+  
+  return currentResult;
+}
 
 export default router;
