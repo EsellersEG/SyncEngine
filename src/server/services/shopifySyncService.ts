@@ -268,7 +268,7 @@ async function individualSync(channel: Channel, products: ProductRow[], mappings
     try {
       if (!shopifyIds) {
         // CREATE
-        await createShopifyProduct(channel, product.sku, mapped, withImages);
+        await createShopifyProduct(channel, product.sku, mapped, withImages, mappings, product.raw_data);
         await logSyncEntry(jobId, product.sku, 'created', 'New product created in Shopify');
         await query('UPDATE sync_jobs SET created_count = created_count + 1 WHERE id = $1', [jobId]);
       } else {
@@ -305,6 +305,52 @@ async function individualSync(channel: Channel, products: ProductRow[], mappings
             productId: shopifyIds.productId,
             variants: [variantInput],
           });
+        }
+
+        // UPDATE images if provided
+        if (withImages && mapped.image_url) {
+          const urls = String(mapped.image_url).split(',').map(u => u.trim()).filter(Boolean);
+          if (urls.length > 0) {
+            const mediaMutation = `
+              mutation productCreateMedia($productId: ID!, $media: [CreateMediaInput!]!) {
+                productCreateMedia(productId: $productId, media: $media) {
+                  media { id }
+                  mediaUserErrors { field message }
+                }
+              }`;
+            await shopifyGraphQL(channel, mediaMutation, {
+              productId: shopifyIds.productId,
+              media: urls.map(url => ({ originalSource: url, mediaContentType: 'IMAGE' })),
+            });
+          }
+        }
+
+        // UPDATE metafields if any
+        const metafieldMappings = mappings.filter(m => m.target_field.startsWith('metafield:'));
+        if (metafieldMappings.length > 0) {
+          const metafields = metafieldMappings
+            .filter(m => product.raw_data[m.feed_column] !== undefined && product.raw_data[m.feed_column] !== null && product.raw_data[m.feed_column] !== '')
+            .map(m => {
+              const parts = m.target_field.replace('metafield:', '').split(':');
+              return {
+                namespace: parts[0],
+                key: parts[1],
+                type: parts[2] || 'single_line_text_field',
+                value: String(product.raw_data[m.feed_column]),
+              };
+            });
+          if (metafields.length > 0) {
+            const metaMutation = `
+              mutation productUpdate($input: ProductInput!) {
+                productUpdate(input: $input) {
+                  product { id }
+                  userErrors { field message }
+                }
+              }`;
+            await shopifyGraphQL(channel, metaMutation, {
+              input: { id: shopifyIds.productId, metafields },
+            });
+          }
         }
 
         // UPDATE stock via inventorySetQuantities
@@ -350,7 +396,7 @@ async function individualSync(channel: Channel, products: ProductRow[], mappings
   }
 }
 
-async function createShopifyProduct(channel: Channel, sku: string, mapped: Record<string, unknown>, withImages: boolean) {
+async function createShopifyProduct(channel: Channel, sku: string, mapped: Record<string, unknown>, withImages: boolean, mappings?: AttributeMapping[], rawData?: Record<string, unknown>) {
   // Step 1: Create product with basic fields using the new API (2024-10+)
   const createMutation = `
     mutation productCreate($product: ProductCreateInput!, $media: [CreateMediaInput!]) {
@@ -367,6 +413,25 @@ async function createShopifyProduct(channel: Channel, sku: string, mapped: Recor
     tags: mapped.tags ? String(mapped.tags).split(',').map(t => t.trim()) : [],
     status: mapped.status ? String(mapped.status).toUpperCase() : 'DRAFT',
   };
+
+  // Add metafields to create input if available
+  if (mappings && rawData) {
+    const metafieldMappings = mappings.filter(m => m.target_field.startsWith('metafield:'));
+    const metafields = metafieldMappings
+      .filter(m => rawData[m.feed_column] !== undefined && rawData[m.feed_column] !== null && rawData[m.feed_column] !== '')
+      .map(m => {
+        const parts = m.target_field.replace('metafield:', '').split(':');
+        return {
+          namespace: parts[0],
+          key: parts[1],
+          type: parts[2] || 'single_line_text_field',
+          value: String(rawData[m.feed_column]),
+        };
+      });
+    if (metafields.length > 0) {
+      product.metafields = metafields;
+    }
+  }
 
   // Media (images) via separate argument
   const media: Array<{ originalSource: string; mediaContentType: string }> = [];
@@ -407,6 +472,32 @@ async function createShopifyProduct(channel: Channel, sku: string, mapped: Recor
         inventoryItem: { sku },
       }],
     });
+  }
+
+  // Step 3: Publish product to all sales channels
+  if (productId) {
+    try {
+      // Get all publications (sales channels)
+      const pubQuery = `{ publications(first: 20) { edges { node { id name } } } }`;
+      const pubData = await shopifyGraphQL(channel, pubQuery) as { publications: { edges: Array<{ node: { id: string; name: string } }> } };
+      const publicationIds = pubData.publications?.edges?.map(e => e.node.id) || [];
+
+      if (publicationIds.length > 0) {
+        const publishMutation = `
+          mutation publishablePublish($id: ID!, $input: [PublicationInput!]!) {
+            publishablePublish(id: $id, input: $input) {
+              publishable { publishedOnCurrentPublication }
+              userErrors { field message }
+            }
+          }`;
+        await shopifyGraphQL(channel, publishMutation, {
+          id: productId,
+          input: publicationIds.map(pid => ({ publicationId: pid })),
+        });
+      }
+    } catch (pubErr) {
+      console.warn(`[Sync] Could not publish product ${productId}:`, pubErr);
+    }
   }
 }
 

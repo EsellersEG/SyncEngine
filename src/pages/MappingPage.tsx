@@ -5,6 +5,7 @@ import { Map, Plus, Save, Trash2, ArrowRight, Wand2, AlertTriangle } from 'lucid
 interface Feed { id: string; name: string; }
 interface Channel { id: string; name: string; type: string; }
 interface Mapping { feed_column: string; target_field: string; transform?: string; }
+interface MetafieldMapping { namespace: string; key: string; type: string; feed_column: string; }
 
 const SHOPIFY_FIELDS = [
   { value: 'title', label: 'Product Title', group: 'Product' },
@@ -107,6 +108,7 @@ export default function MappingPage() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savedMsg, setSavedMsg] = useState('');
+  const [metafields, setMetafields] = useState<MetafieldMapping[]>([]);
 
   useEffect(() => {
     Promise.all([api.get('/feeds'), api.get('/channels')]).then(([f, c]) => {
@@ -126,10 +128,16 @@ export default function MappingPage() {
       const p = preview as { headers: string[] };
       const e = existing as { feed_column: string; target_field: string; transform?: string }[];
       setFeedHeaders(p.headers || []);
-      if (e.length > 0) {
-        setMappings(e);
+      // Separate metafield mappings from regular ones
+      const regularMappings = e.filter(m => !m.target_field.startsWith('metafield:'));
+      const metafieldMappings = e.filter(m => m.target_field.startsWith('metafield:')).map(m => {
+        const parts = m.target_field.replace('metafield:', '').split(':');
+        return { namespace: parts[0] || 'custom', key: parts[1] || '', type: parts[2] || 'single_line_text_field', feed_column: m.feed_column };
+      });
+      setMetafields(metafieldMappings);
+      if (regularMappings.length > 0) {
+        setMappings(regularMappings);
       } else {
-        // Auto-map on first load when no mappings exist
         const autoMapped = autoMapHeaders(p.headers || []);
         setMappings(autoMapped);
       }
@@ -175,7 +183,15 @@ export default function MappingPage() {
     setSaving(true);
     setSavedMsg('');
     try {
-      await api.put('/mappings/bulk', { feed_id: selectedFeed, channel_id: selectedChannel, mappings });
+      // Combine regular mappings + metafield mappings
+      const allMappings = [
+        ...mappings,
+        ...metafields.filter(m => m.key && m.feed_column).map(m => ({
+          feed_column: m.feed_column,
+          target_field: `metafield:${m.namespace}:${m.key}:${m.type}`,
+        })),
+      ];
+      await api.put('/mappings/bulk', { feed_id: selectedFeed, channel_id: selectedChannel, mappings: allMappings });
       setSavedMsg('Mappings saved successfully!');
       setTimeout(() => setSavedMsg(''), 3000);
     } catch (err) {
@@ -305,6 +321,64 @@ export default function MappingPage() {
 
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12, marginTop: 8 }}>
                   <button className="btn btn-secondary btn-sm" onClick={addMapping}><Plus size={12} /> Add Row</button>
+                </div>
+
+                {/* Metafields Section */}
+                <div style={{ marginTop: 32 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                    <div>
+                      <div style={{ fontSize: 15, fontWeight: 700, color: '#e2e8f0' }}>Metafields (Optional)</div>
+                      <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>Map feed columns to Shopify metafields. Each needs a namespace, key, and type.</div>
+                    </div>
+                    <button className="btn btn-secondary btn-sm" onClick={() => setMetafields(prev => [...prev, { namespace: 'custom', key: '', type: 'number_decimal', feed_column: '' }])}>
+                      <Plus size={12} /> Add Metafield
+                    </button>
+                  </div>
+
+                  {metafields.length > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      {metafields.map((mf, idx) => (
+                        <div key={idx} className="glass-card" style={{ padding: '14px 16px', display: 'grid', gridTemplateColumns: '1fr 1.2fr 1fr 1.5fr 36px', gap: 10, alignItems: 'center' }}>
+                          <input className="input" placeholder="custom" value={mf.namespace}
+                            onChange={e => setMetafields(prev => prev.map((m, i) => i === idx ? { ...m, namespace: e.target.value } : m))} />
+                          <input className="input" placeholder="key (e.g. cosmo_2)" value={mf.key}
+                            onChange={e => setMetafields(prev => prev.map((m, i) => i === idx ? { ...m, key: e.target.value } : m))} />
+                          <select className="input" value={mf.type}
+                            onChange={e => setMetafields(prev => prev.map((m, i) => i === idx ? { ...m, type: e.target.value } : m))}>
+                            <option value="number_decimal">Decimal</option>
+                            <option value="number_integer">Integer</option>
+                            <option value="single_line_text_field">Text</option>
+                            <option value="multi_line_text_field">Multi-line Text</option>
+                            <option value="boolean">Boolean</option>
+                            <option value="json">JSON</option>
+                            <option value="url">URL</option>
+                            <option value="date">Date</option>
+                          </select>
+                          <select className="input" value={mf.feed_column}
+                            onChange={e => setMetafields(prev => prev.map((m, i) => i === idx ? { ...m, feed_column: e.target.value } : m))}>
+                            <option value="">-- Select Column --</option>
+                            {feedHeaders.map(h => <option key={h} value={h}>{h}</option>)}
+                          </select>
+                          <button className="btn btn-danger btn-sm btn-icon" onClick={() => setMetafields(prev => prev.filter((_, i) => i !== idx))}>
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      ))}
+                      {/* Header labels */}
+                      {metafields.length > 0 && (
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr 1fr 1.5fr 36px', gap: 10, padding: '0 4px', marginTop: -4 }}>
+                          <div style={{ fontSize: 10, color: '#475569' }}>Namespace</div>
+                          <div style={{ fontSize: 10, color: '#475569' }}>Key</div>
+                          <div style={{ fontSize: 10, color: '#475569' }}>Type</div>
+                          <div style={{ fontSize: 10, color: '#475569' }}>Feed Column</div>
+                          <div />
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12, marginTop: 24 }}>
                   <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
                     <Save size={14} />
                     {saving ? 'Saving...' : savedMsg ? '✓ Saved!' : 'Save All Mappings'}
