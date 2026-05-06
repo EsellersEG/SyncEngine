@@ -402,9 +402,9 @@ async function createShopifyProduct(channel: Channel, sku: string, mapped: Recor
       productId,
       variants: [{
         id: variantId,
-        sku,
         price: mapped.price ? String(mapped.price) : '0.00',
         compareAtPrice: mapped.compare_at_price ? String(mapped.compare_at_price) : null,
+        inventoryItem: { sku },
       }],
     });
   }
