@@ -35,8 +35,8 @@ router.get('/:id', async (req, res) => {
   try {
     const result = await query('SELECT * FROM channels WHERE id = $1', [req.params.id]);
     if (!result.rows[0]) return res.status(404).json({ error: 'Channel not found' });
-    const ch = { ...result.rows[0], shopify_access_token: ch.shopify_access_token ? '••••••••' : null };
-    return res.json(ch);
+    const ch = result.rows[0];
+    return res.json({ ...ch, shopify_access_token: ch.shopify_access_token ? '••••••••' : null });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Failed to fetch channel' });
@@ -132,6 +132,55 @@ router.post('/:id/test', async (req, res) => {
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Connection test failed' });
+  }
+});
+
+// GET /api/channels/:id/locations — fetch stock locations from Shopify
+router.get('/:id/locations', async (req, res) => {
+  try {
+    const result = await query(
+      'SELECT shopify_store_url, shopify_access_token, shopify_api_version FROM channels WHERE id = $1',
+      [req.params.id]
+    );
+    const ch = result.rows[0];
+    if (!ch) return res.status(404).json({ error: 'Channel not found' });
+
+    const url = `https://${ch.shopify_store_url}/admin/api/${ch.shopify_api_version}/graphql.json`;
+    const gqlRes = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Shopify-Access-Token': ch.shopify_access_token,
+      },
+      body: JSON.stringify({
+        query: `{ locations(first: 50) { edges { node { id name isActive address { formatted } } } } }`,
+      }),
+    });
+
+    if (!gqlRes.ok) {
+      return res.status(400).json({ error: 'Failed to fetch locations from Shopify' });
+    }
+
+    const data = await gqlRes.json() as {
+      data?: { locations: { edges: Array<{ node: { id: string; name: string; isActive: boolean; address: { formatted: string[] } } }> } };
+      errors?: unknown[];
+    };
+
+    if (data.errors) {
+      return res.status(400).json({ error: 'GraphQL error', details: data.errors });
+    }
+
+    const locations = data.data?.locations?.edges?.map(e => ({
+      id: e.node.id,
+      name: e.node.name,
+      active: e.node.isActive,
+      address: e.node.address?.formatted?.join(', ') || '',
+    })) || [];
+
+    return res.json(locations);
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to fetch locations' });
   }
 });
 

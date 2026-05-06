@@ -14,6 +14,7 @@ interface Channel {
   shopify_store_url: string;
   shopify_access_token: string;
   shopify_api_version: string;
+  settings?: { stock_location_id?: string };
 }
 
 interface SyncJobConfig {
@@ -192,43 +193,51 @@ async function syncProductTurbo(
   try {
     const mapped = applyMappings(product.raw_data, mappings);
 
-    // Price update
+    // Price update via productVariantsBulkUpdate
     if (mapped.price || mapped.compare_at_price) {
       const priceQuery = `
-        mutation variantUpdate($input: ProductVariantInput!) {
-          productVariantUpdate(input: $input) {
-            productVariant { id price compareAtPrice }
+        mutation variantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+          productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+            productVariants { id }
             userErrors { field message }
           }
         }`;
       await shopifyGraphQL(channel, priceQuery, {
-        input: {
+        productId: shopifyIds.productId,
+        variants: [{
           id: shopifyIds.variantId,
-          price: mapped.price,
-          compareAtPrice: mapped.compare_at_price || null,
-        },
+          price: mapped.price ? String(mapped.price) : undefined,
+          compareAtPrice: mapped.compare_at_price ? String(mapped.compare_at_price) : undefined,
+        }],
       });
     }
 
-    // Stock update — get location first
+    // Stock update — use inventorySetQuantities
     if (mapped.inventory_quantity !== undefined) {
-      const locQuery = `{ locations(first: 1) { edges { node { id } } } }`;
-      const locData = await shopifyGraphQL(channel, locQuery) as { locations: { edges: Array<{ node: { id: string } }> } };
-      const locationId = locData.locations.edges[0]?.node?.id;
+      let locationId = channel.settings?.stock_location_id;
+      if (!locationId) {
+        const locQuery = `{ locations(first: 1) { edges { node { id } } } }`;
+        const locData = await shopifyGraphQL(channel, locQuery) as { locations: { edges: Array<{ node: { id: string } }> } };
+        locationId = locData.locations.edges[0]?.node?.id;
+      }
 
       if (locationId) {
         const stockQuery = `
-          mutation inventorySet($input: InventoryAdjustQuantityInput!) {
-            inventoryAdjustQuantity(input: $input) {
-              inventoryLevel { available }
+          mutation inventorySetQuantities($input: InventorySetQuantitiesInput!) {
+            inventorySetQuantities(input: $input) {
+              inventoryAdjustmentGroup { reason }
               userErrors { field message }
             }
           }`;
         await shopifyGraphQL(channel, stockQuery, {
           input: {
-            inventoryItemId: shopifyIds.inventoryItemId,
-            locationId,
-            delta: parseInt(String(mapped.inventory_quantity)) - 0, // delta — will improve with current tracking
+            name: "available",
+            reason: "correction",
+            quantities: [{
+              inventoryItemId: shopifyIds.inventoryItemId,
+              locationId,
+              quantity: parseInt(String(mapped.inventory_quantity)),
+            }],
           },
         });
       }
@@ -263,7 +272,7 @@ async function individualSync(channel: Channel, products: ProductRow[], mappings
         await logSyncEntry(jobId, product.sku, 'created', 'New product created in Shopify');
         await query('UPDATE sync_jobs SET created_count = created_count + 1 WHERE id = $1', [jobId]);
       } else {
-        // UPDATE title, body, tags, vendor, status
+        // UPDATE product fields
         const updateMutation = `
           mutation productUpdate($input: ProductInput!) {
             productUpdate(input: $input) {
@@ -279,6 +288,55 @@ async function individualSync(channel: Channel, products: ProductRow[], mappings
         if (mapped.status) input.status = String(mapped.status).toUpperCase();
 
         await shopifyGraphQL(channel, updateMutation, { input });
+
+        // UPDATE variant price/sku via productVariantsBulkUpdate
+        if (mapped.price || mapped.compare_at_price || mapped.sku) {
+          const variantMutation = `
+            mutation variantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+              productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+                productVariants { id }
+                userErrors { field message }
+              }
+            }`;
+          const variantInput: Record<string, unknown> = { id: shopifyIds.variantId };
+          if (mapped.price) variantInput.price = String(mapped.price);
+          if (mapped.compare_at_price) variantInput.compareAtPrice = String(mapped.compare_at_price);
+          await shopifyGraphQL(channel, variantMutation, {
+            productId: shopifyIds.productId,
+            variants: [variantInput],
+          });
+        }
+
+        // UPDATE stock via inventorySetQuantities
+        if (mapped.inventory_quantity !== undefined) {
+          let locationId = channel.settings?.stock_location_id;
+          if (!locationId) {
+            const locQuery = `{ locations(first: 1) { edges { node { id } } } }`;
+            const locData = await shopifyGraphQL(channel, locQuery) as { locations: { edges: Array<{ node: { id: string } }> } };
+            locationId = locData.locations.edges[0]?.node?.id;
+          }
+          if (locationId) {
+            const stockQuery = `
+              mutation inventorySetQuantities($input: InventorySetQuantitiesInput!) {
+                inventorySetQuantities(input: $input) {
+                  inventoryAdjustmentGroup { reason }
+                  userErrors { field message }
+                }
+              }`;
+            await shopifyGraphQL(channel, stockQuery, {
+              input: {
+                name: "available",
+                reason: "correction",
+                quantities: [{
+                  inventoryItemId: shopifyIds.inventoryItemId,
+                  locationId,
+                  quantity: parseInt(String(mapped.inventory_quantity)),
+                }],
+              },
+            });
+          }
+        }
+
         await logSyncEntry(jobId, product.sku, 'updated', 'Full sync succeeded');
         await query('UPDATE sync_jobs SET updated_count = updated_count + 1 WHERE id = $1', [jobId]);
       }
@@ -331,22 +389,23 @@ async function createShopifyProduct(channel: Channel, sku: string, mapped: Recor
   const productId = result.productCreate.product?.id;
   const variantId = result.productCreate.product?.variants?.edges?.[0]?.node?.id;
 
-  // Step 2: Update the default variant with SKU, price, inventory settings
-  if (variantId) {
+  // Step 2: Update the default variant with SKU, price via productVariantsBulkUpdate
+  if (variantId && productId) {
     const variantMutation = `
-      mutation productVariantUpdate($input: ProductVariantInput!) {
-        productVariantUpdate(input: $input) {
-          productVariant { id sku }
+      mutation variantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+        productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+          productVariants { id sku }
           userErrors { field message }
         }
       }`;
     await shopifyGraphQL(channel, variantMutation, {
-      input: {
+      productId,
+      variants: [{
         id: variantId,
         sku,
-        price: mapped.price || '0.00',
-        compareAtPrice: mapped.compare_at_price || null,
-      },
+        price: mapped.price ? String(mapped.price) : '0.00',
+        compareAtPrice: mapped.compare_at_price ? String(mapped.compare_at_price) : null,
+      }],
     });
   }
 }

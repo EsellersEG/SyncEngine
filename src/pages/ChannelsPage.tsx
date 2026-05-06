@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
-import { Plus, GitBranch, Trash2, CheckCircle, XCircle, Loader } from 'lucide-react';
+import { Plus, GitBranch, Trash2, CheckCircle, XCircle, Loader, Pencil } from 'lucide-react';
 
 interface Channel {
   id: string; client_id: string; name: string; type: string; status: string;
   shopify_store_url: string; shopify_api_version: string; total_syncs: string;
-  last_synced_at: string | null; created_at: string;
+  last_synced_at: string | null; created_at: string; settings?: { stock_location_id?: string };
 }
 interface Client { id: string; name: string; }
+interface Location { id: string; name: string; active: boolean; address: string; }
 
 const CHANNEL_TYPES = [
   { value: 'shopify', label: 'Shopify', badge: 'badge-success', color: '#4ade80' },
@@ -34,6 +35,10 @@ export default function ChannelsPage() {
     shopify_store_url: '', shopify_access_token: '', shopify_api_version: '2024-10',
   });
   const [error, setError] = useState('');
+  const [editChannel, setEditChannel] = useState<Channel | null>(null);
+  const [editForm, setEditForm] = useState({ name: '', shopify_access_token: '', shopify_api_version: '2024-10', stock_location_id: '' });
+  const [locations, setLocations] = useState<Location[]>([]);
+  const [loadingLocations, setLoadingLocations] = useState(false);
 
   useEffect(() => {
     Promise.all([api.get('/channels'), api.get('/clients')])
@@ -70,6 +75,41 @@ export default function ChannelsPage() {
     if (!confirm('Delete this channel? All sync history will be removed.')) return;
     await api.delete(`/channels/${channelId}`);
     setChannels(prev => prev.filter(ch => ch.id !== channelId));
+  }
+
+  async function openEditModal(ch: Channel) {
+    setEditChannel(ch);
+    setEditForm({
+      name: ch.name,
+      shopify_access_token: '',
+      shopify_api_version: ch.shopify_api_version || '2024-10',
+      stock_location_id: ch.settings?.stock_location_id || '',
+    });
+    setError('');
+    setLocations([]);
+    // Fetch locations
+    setLoadingLocations(true);
+    try {
+      const locs = await api.get(`/channels/${ch.id}/locations`) as Location[];
+      setLocations(locs);
+    } catch { /* ignore - store might not be connected */ }
+    setLoadingLocations(false);
+  }
+
+  async function handleEdit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editChannel) return;
+    setError('');
+    try {
+      const body: Record<string, unknown> = { name: editForm.name, shopify_api_version: editForm.shopify_api_version };
+      if (editForm.shopify_access_token) body.shopify_access_token = editForm.shopify_access_token;
+      body.settings = { stock_location_id: editForm.stock_location_id || null };
+      const updated = await api.patch(`/channels/${editChannel.id}`, body) as Channel;
+      setChannels(prev => prev.map(ch => ch.id === updated.id ? { ...ch, ...updated } : ch));
+      setEditChannel(null);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to update');
+    }
   }
 
   return (
@@ -160,6 +200,9 @@ export default function ChannelsPage() {
                         Coming in Phase 2
                       </div>
                     )}
+                    <button className="btn btn-secondary btn-sm btn-icon" onClick={() => openEditModal(ch)} title="Edit">
+                      <Pencil size={12} />
+                    </button>
                     <button className="btn btn-danger btn-sm btn-icon" onClick={() => handleDelete(ch.id)} title="Delete">
                       <Trash2 size={12} />
                     </button>
@@ -170,6 +213,59 @@ export default function ChannelsPage() {
           </div>
         )}
       </div>
+
+      {/* Edit Modal */}
+      {editChannel && (
+        <div className="modal-backdrop" onClick={() => setEditChannel(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h2 style={{ fontSize: 18, fontWeight: 700, color: '#e2e8f0', marginBottom: 6 }}>Edit Channel</h2>
+            <p style={{ fontSize: 13, color: '#64748b', marginBottom: 24 }}>Update {editChannel.name}</p>
+            <form onSubmit={handleEdit} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <div className="form-group">
+                <label className="label">Channel Name</label>
+                <input className="input" value={editForm.name}
+                  onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))} required />
+              </div>
+              <div className="form-group">
+                <label className="label">Access Token (leave blank to keep current)</label>
+                <input className="input" type="password" placeholder="shpat_... (unchanged if blank)" value={editForm.shopify_access_token}
+                  onChange={e => setEditForm(f => ({ ...f, shopify_access_token: e.target.value }))} />
+              </div>
+              <div className="form-group">
+                <label className="label">API Version</label>
+                <select className="input" value={editForm.shopify_api_version}
+                  onChange={e => setEditForm(f => ({ ...f, shopify_api_version: e.target.value }))}>
+                  <option value="2024-10">2024-10</option>
+                  <option value="2024-07">2024-07</option>
+                  <option value="2024-04">2024-04</option>
+                  <option value="2024-01">2024-01</option>
+                </select>
+              </div>
+              <div className="form-group">
+                <label className="label">Stock Location</label>
+                {loadingLocations ? (
+                  <div style={{ padding: '8px 0', fontSize: 13, color: '#64748b' }}>Loading locations from Shopify...</div>
+                ) : locations.length === 0 ? (
+                  <div style={{ padding: '8px 0', fontSize: 13, color: '#64748b' }}>No locations found (test connection first)</div>
+                ) : (
+                  <select className="input" value={editForm.stock_location_id}
+                    onChange={e => setEditForm(f => ({ ...f, stock_location_id: e.target.value }))}>
+                    <option value="">Auto (first location)</option>
+                    {locations.filter(l => l.active).map(loc => (
+                      <option key={loc.id} value={loc.id}>{loc.name} — {loc.address}</option>
+                    ))}
+                  </select>
+                )}
+              </div>
+              {error && <div style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: '#f87171' }}>{error}</div>}
+              <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
+                <button type="button" className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setEditChannel(null)}>Cancel</button>
+                <button type="submit" className="btn btn-primary" style={{ flex: 1 }}>Save Changes</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {showModal && (
         <div className="modal-backdrop" onClick={() => setShowModal(false)}>
