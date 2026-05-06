@@ -12,6 +12,7 @@ import SyncPage from './pages/SyncPage';
 import MappingPage from './pages/MappingPage';
 import ProductsPage from './pages/ProductsPage';
 import UsersPage from './pages/UsersPage';
+import OrdersPage from './pages/OrdersPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -45,6 +46,7 @@ function AppRoutes() {
         <Route path="sync" element={<SyncPage />} />
         <Route path="mapping" element={<MappingPage />} />
         <Route path="products" element={<ProductsPage />} />
+        <Route path="orders" element={<OrdersPage />} />
         <Route path="users" element={<UsersPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

@@ -34,15 +34,23 @@ CREATE TABLE user_clients (
   PRIMARY KEY (user_id, client_id)
 );
 
--- Feeds (Google Sheets connections)
+-- Feeds (Google Sheets / Odoo connections)
 CREATE TABLE feeds (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   client_id UUID REFERENCES clients(id) ON DELETE CASCADE,
   name VARCHAR(255) NOT NULL,
-  spreadsheet_id TEXT NOT NULL,
+  type VARCHAR(20) DEFAULT 'google_sheets', -- 'google_sheets', 'odoo'
+  spreadsheet_id TEXT,
   sheet_name VARCHAR(255) DEFAULT 'Sheet1',
   header_row INT DEFAULT 1,
   service_account_json TEXT, -- encrypted JSON
+  -- Odoo specific
+  odoo_url TEXT,
+  odoo_database VARCHAR(255),
+  odoo_username VARCHAR(255),
+  odoo_api_key TEXT,
+  -- Scheduling
+  sync_interval_minutes INT,
   last_sync_at TIMESTAMPTZ,
   last_row_count INT DEFAULT 0,
   is_active BOOLEAN DEFAULT TRUE,
@@ -143,3 +151,24 @@ CREATE INDEX idx_products_sku ON products(sku);
 CREATE INDEX idx_sync_jobs_channel ON sync_jobs(channel_id);
 CREATE INDEX idx_sync_logs_job ON sync_logs(job_id);
 CREATE INDEX idx_shopify_products_channel_sku ON shopify_products(channel_id, sku);
+
+-- Orders (Shopify → Odoo sync)
+CREATE TABLE orders (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id UUID REFERENCES clients(id) ON DELETE CASCADE,
+  channel_id UUID REFERENCES channels(id) ON DELETE CASCADE,
+  shopify_order_id TEXT NOT NULL,
+  shopify_order_number TEXT,
+  odoo_order_id INT,
+  status VARCHAR(50) DEFAULT 'pending', -- 'pending', 'synced', 'failed'
+  total_price DECIMAL(10,2),
+  customer_email VARCHAR(255),
+  raw_data JSONB NOT NULL,
+  error_message TEXT,
+  synced_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(channel_id, shopify_order_id)
+);
+CREATE INDEX idx_orders_client ON orders(client_id);
+CREATE INDEX idx_orders_channel ON orders(channel_id);
+CREATE INDEX idx_orders_status ON orders(status);

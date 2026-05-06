@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { query } from '../db.js';
 import { authenticate, type AuthRequest } from '../middleware/auth.js';
-import { runSyncJob } from '../services/shopifySyncService.js';
+import { runSyncJob, cancelJob } from '../services/shopifySyncService.js';
 
 const router = Router();
 router.use(authenticate);
@@ -122,6 +122,8 @@ router.post('/jobs/:id/cancel', async (req, res) => {
       [req.params.id]
     );
     if (!result.rows[0]) return res.status(404).json({ error: 'Job not found or not cancellable' });
+    // Signal the in-memory running loop to stop
+    cancelJob(req.params.id);
     return res.json({ success: true });
   } catch (err) {
     console.error(err);

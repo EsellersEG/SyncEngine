@@ -1,6 +1,7 @@
 import { google } from 'googleapis';
 import crypto from 'crypto';
 import { query } from '../db.js';
+import { fetchOdooProducts, type OdooConfig } from './odooService.js';
 
 // In-memory import progress tracking
 const importProgress: Map<string, { total: number; processed: number; status: 'running' | 'done' | 'error'; error?: string }> = new Map();
@@ -16,10 +17,15 @@ interface FeedRow {
 interface FeedRecord {
   id: string;
   client_id: string;
+  type?: string;
   spreadsheet_id: string;
   sheet_name: string;
   header_row: number;
   service_account_json: string;
+  odoo_url?: string;
+  odoo_database?: string;
+  odoo_username?: string;
+  odoo_api_key?: string;
 }
 
 function getAuthClient(serviceAccountJson?: string | null) {
@@ -63,6 +69,11 @@ export async function fetchSheetData(feed: FeedRecord): Promise<{ headers: strin
 }
 
 export async function previewFeed(feed: FeedRecord, limit = 10) {
+  if (feed.type === 'odoo') {
+    const config: OdooConfig = { url: feed.odoo_url!, database: feed.odoo_database!, username: feed.odoo_username!, apiKey: feed.odoo_api_key! };
+    const { headers, rows } = await fetchOdooProducts(config);
+    return { headers, rows: rows.slice(0, limit), total: rows.length };
+  }
   const { headers, rows } = await fetchSheetData(feed);
   return { headers, rows: rows.slice(0, limit), total: rows.length };
 }
@@ -82,13 +93,29 @@ function detectSkuColumn(headers: string[]): string | null {
 }
 
 export async function importFeedProducts(feed: FeedRecord) {
-  console.log(`[FeedService] Importing feed: ${feed.id}`);
+  console.log(`[FeedService] Importing feed: ${feed.id} (type: ${feed.type || 'google_sheets'})`);
   importProgress.set(feed.id, { total: 0, processed: 0, status: 'running' });
 
   try {
-    const { headers, rows } = await fetchSheetData(feed);
+    let headers: string[];
+    let rows: FeedRow[];
+    let skuColumn: string | null;
 
-    const skuColumn = detectSkuColumn(headers);
+    if (feed.type === 'odoo') {
+      // Odoo feed — fetch via XML-RPC
+      const config: OdooConfig = { url: feed.odoo_url!, database: feed.odoo_database!, username: feed.odoo_username!, apiKey: feed.odoo_api_key! };
+      const result = await fetchOdooProducts(config);
+      headers = result.headers;
+      rows = result.rows;
+      skuColumn = 'barcode'; // Odoo products matched by barcode
+    } else {
+      // Google Sheets feed
+      const result = await fetchSheetData(feed);
+      headers = result.headers;
+      rows = result.rows;
+      skuColumn = detectSkuColumn(headers);
+    }
+
     if (!skuColumn) {
       console.error(`[FeedService] No SKU column found in feed ${feed.id}`);
       importProgress.set(feed.id, { total: 0, processed: 0, status: 'error', error: 'No SKU column found' });

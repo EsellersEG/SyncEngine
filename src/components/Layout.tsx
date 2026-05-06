@@ -13,6 +13,7 @@ const navItems = [
   { to: '/products', icon: Package, label: 'Products' },
   { to: '/mapping', icon: Map, label: 'Attribute Mapping' },
   { to: '/sync', icon: Zap, label: 'Sync Jobs' },
+  { to: '/orders', icon: ShoppingBag, label: 'Orders' },
 ];
 
 const adminItems = [

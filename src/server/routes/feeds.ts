@@ -28,15 +28,21 @@ router.get('/', async (req: AuthRequest, res) => {
 // POST /api/feeds
 router.post('/', async (req: AuthRequest, res) => {
   try {
-    const { client_id, name, spreadsheet_id, sheet_name = 'Sheet1', header_row = 1, service_account_json } = req.body;
-    if (!client_id || !name || !spreadsheet_id) {
-      return res.status(400).json({ error: 'client_id, name, and spreadsheet_id required' });
+    const { client_id, name, type = 'google_sheets', spreadsheet_id, sheet_name = 'Sheet1', header_row = 1, service_account_json, odoo_url, odoo_database, odoo_username, odoo_api_key, sync_interval_minutes } = req.body;
+    if (!client_id || !name) {
+      return res.status(400).json({ error: 'client_id and name required' });
+    }
+    if (type === 'google_sheets' && !spreadsheet_id) {
+      return res.status(400).json({ error: 'spreadsheet_id required for Google Sheets feed' });
+    }
+    if (type === 'odoo' && (!odoo_url || !odoo_database || !odoo_username || !odoo_api_key)) {
+      return res.status(400).json({ error: 'odoo_url, odoo_database, odoo_username, and odoo_api_key required for Odoo feed' });
     }
     const result = await query(
-      `INSERT INTO feeds (client_id, name, spreadsheet_id, sheet_name, header_row, service_account_json)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING id, client_id, name, spreadsheet_id, sheet_name, header_row, is_active, created_at`,
-      [client_id, name, spreadsheet_id, sheet_name, header_row, service_account_json || null]
+      `INSERT INTO feeds (client_id, name, type, spreadsheet_id, sheet_name, header_row, service_account_json, odoo_url, odoo_database, odoo_username, odoo_api_key, sync_interval_minutes)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       RETURNING *`,
+      [client_id, name, type, spreadsheet_id || '', sheet_name, header_row, service_account_json || null, odoo_url || null, odoo_database || null, odoo_username || null, odoo_api_key || null, sync_interval_minutes || null]
     );
     return res.status(201).json(result.rows[0]);
   } catch (err) {
@@ -122,6 +128,22 @@ router.get('/:id/preview', async (req, res) => {
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Failed to preview feed' });
+  }
+});
+
+// POST /api/feeds/test-odoo — test Odoo connection
+router.post('/test-odoo', async (req: AuthRequest, res) => {
+  try {
+    const { url, database, username, api_key } = req.body;
+    if (!url || !database || !username || !api_key) {
+      return res.status(400).json({ error: 'url, database, username, and api_key required' });
+    }
+    const { testOdooConnection } = await import('../services/odooService.js');
+    const result = await testOdooConnection({ url, database, username, apiKey: api_key });
+    return res.json(result);
+  } catch (err) {
+    console.error('Odoo connection test failed:', err);
+    return res.status(400).json({ error: err instanceof Error ? err.message : 'Connection failed' });
   }
 });
 
