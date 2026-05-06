@@ -40,10 +40,23 @@ async function init() {
     } else {
       throw err;
     }
-  } finally {
-    client.release();
-    await pool.end();
   }
+
+  // Run migrations for missing columns
+  try {
+    const migrations = [
+      `ALTER TABLE sync_jobs ADD COLUMN IF NOT EXISTS processed_count INT DEFAULT 0`,
+    ];
+    for (const sql of migrations) {
+      await client.query(sql);
+    }
+    console.log('✅ Migrations applied');
+  } catch (err) {
+    console.error('⚠️  Migration warning:', err.message);
+  }
+
+  client.release();
+  await pool.end();
 }
 
 init().catch(err => {

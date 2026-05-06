@@ -102,6 +102,7 @@ CREATE TABLE sync_jobs (
   fields TEXT[], -- specific fields if custom
   status VARCHAR(50) DEFAULT 'pending', -- 'pending','running','completed','failed','cancelled'
   total_products INT DEFAULT 0,
+  processed_count INT DEFAULT 0,
   created_count INT DEFAULT 0,
   updated_count INT DEFAULT 0,
   failed_count INT DEFAULT 0,
