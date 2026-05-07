@@ -22,8 +22,8 @@ export default function FeedsPage() {
   const [showModal, setShowModal] = useState(false);
   const [editingFeed, setEditingFeed] = useState<Feed | null>(null);
   const [importing, setImporting] = useState<string | null>(null);
-  const [importProgress, setImportProgress] = useState<{ total: number; processed: number; status: string; error?: string } | null>(null);
-  const [importError, setImportError] = useState<string | null>(null);
+  const [importProgress, setImportProgress] = useState<Record<string, { total: number; processed: number; status: string; error?: string }>>({});
+  const [importError, setImportError] = useState<Record<string, string>>({});
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [form, setForm] = useState({
     client_id: clientId || '', name: '', type: 'google_sheets',
@@ -98,32 +98,35 @@ export default function FeedsPage() {
 
   async function handleImport(feedId: string) {
     setImporting(feedId);
-    setImportProgress(null);
-    setImportError(null);
+    setImportProgress(prev => { const n = { ...prev }; delete n[feedId]; return n; });
+    setImportError(prev => { const n = { ...prev }; delete n[feedId]; return n; });
     try {
       await api.post(`/feeds/${feedId}/import`, {});
       pollRef.current = setInterval(async () => {
         try {
           const progress = await api.get(`/feeds/${feedId}/import-status`) as { total: number; processed: number; status: string; error?: string };
-          setImportProgress(progress);
+          setImportProgress(prev => ({ ...prev, [feedId]: progress }));
           if (progress.status === 'done' || progress.status === 'error' || progress.status === 'idle') {
             clearInterval(pollRef.current!);
             pollRef.current = null;
             setImporting(null);
             if (progress.status === 'error') {
-              setImportError(progress.error || 'Import failed — check server logs');
+              setImportError(prev => ({ ...prev, [feedId]: progress.error || 'Import failed — check server logs' }));
             } else if (progress.status === 'done') {
               const f = await api.get(`/feeds${clientId ? `?client_id=${clientId}` : ''}`) as Feed[];
               setFeeds(f);
             }
-            setTimeout(() => { setImportProgress(null); setImportError(null); }, 10000);
+            setTimeout(() => {
+              setImportProgress(prev => { const n = { ...prev }; delete n[feedId]; return n; });
+              setImportError(prev => { const n = { ...prev }; delete n[feedId]; return n; });
+            }, 10000);
           }
         } catch (pollErr) {
           console.error('Import poll error:', pollErr);
         }
       }, 1000);
     } catch (err: unknown) {
-      setImportError(err instanceof Error ? err.message : 'Import failed');
+      setImportError(prev => ({ ...prev, [feedId]: err instanceof Error ? err.message : 'Import failed' }));
       setImporting(null);
     }
   }
@@ -219,8 +222,8 @@ export default function FeedsPage() {
                           title="Import products"
                         >
                           <RefreshCw size={12} className={importing === feed.id ? 'spinner' : ''} />
-                          {importing === feed.id && importProgress && importProgress.total > 0
-                            ? `${Math.round((importProgress.processed / importProgress.total) * 100)}%`
+                          {importing === feed.id && importProgress[feed.id] && importProgress[feed.id].total > 0
+                            ? `${Math.round((importProgress[feed.id].processed / importProgress[feed.id].total) * 100)}%`
                             : importing === feed.id ? 'Starting...' : 'Import'}
                         </button>
                         <button className="btn btn-secondary btn-sm btn-icon" onClick={() => {
@@ -242,21 +245,21 @@ export default function FeedsPage() {
                           <Trash2 size={12} />
                         </button>
                       </div>
-                      {importing === feed.id && importProgress && importProgress.total > 0 && (
+                      {importing === feed.id && importProgress[feed.id] && importProgress[feed.id].total > 0 && (
                         <div style={{ marginTop: 8 }}>
                           <div className="progress-bar" style={{ height: 4 }}>
-                            <div className="progress-fill" style={{ width: `${Math.round((importProgress.processed / importProgress.total) * 100)}%` }} />
+                            <div className="progress-fill" style={{ width: `${Math.round((importProgress[feed.id].processed / importProgress[feed.id].total) * 100)}%` }} />
                           </div>
                           <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>
-                            {importProgress.processed.toLocaleString()} / {importProgress.total.toLocaleString()} products
+                            {importProgress[feed.id].processed.toLocaleString()} / {importProgress[feed.id].total.toLocaleString()} products
                           </div>
                         </div>
                       )}
-                      {importProgress?.status === 'done' && !importing && (
+                      {importProgress[feed.id]?.status === 'done' && !importing && (
                         <div style={{ marginTop: 6, fontSize: 12, color: '#4ade80' }}>✓ Import complete</div>
                       )}
-                      {importError && !importing && (
-                        <div style={{ marginTop: 6, fontSize: 12, color: '#f87171', wordBreak: 'break-word' }}>✗ {importError}</div>
+                      {importError[feed.id] && importing !== feed.id && (
+                        <div style={{ marginTop: 6, fontSize: 12, color: '#f87171', wordBreak: 'break-word' }}>✗ {importError[feed.id]}</div>
                       )}
                     </td>
                   </tr>

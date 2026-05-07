@@ -235,17 +235,29 @@ export async function fetchOdooProducts(config: OdooConfig): Promise<{ headers: 
     'categ_id', 'weight', 'description_sale', 'image_1920', 'active',
   ];
 
-  // Fetch all storable products
-  const products = await odooExecute(config, uid, 'product.product', 'search_read', [
-    [['active', '=', true], ['type', '=', 'product']]
-  ], { fields, limit: 0 }) as Array<Record<string, unknown>>;
+  // Paginate to avoid 502 timeouts on large catalogs
+  const PAGE_SIZE = 500;
+  let offset = 0;
+  const allProducts: Array<Record<string, unknown>> = [];
 
-  if (!products || products.length === 0) {
+  while (true) {
+    const batch = await odooExecute(config, uid, 'product.product', 'search_read', [
+      [['active', '=', true], ['type', '=', 'product']]
+    ], { fields, limit: PAGE_SIZE, offset }) as Array<Record<string, unknown>>;
+
+    if (!batch || batch.length === 0) break;
+    allProducts.push(...batch);
+    console.log(`[OdooService] Fetched ${allProducts.length} products (offset=${offset})...`);
+    if (batch.length < PAGE_SIZE) break;
+    offset += PAGE_SIZE;
+  }
+
+  if (allProducts.length === 0) {
     return { headers: fields, rows: [] };
   }
 
   // Convert to flat rows (same format as Google Sheets)
-  const rows: FeedRow[] = products.map(p => {
+  const rows: FeedRow[] = allProducts.map(p => {
     const row: FeedRow = {};
     row['barcode'] = p.barcode ? String(p.barcode) : null;
     row['name'] = p.name ? String(p.name) : null;
