@@ -145,6 +145,7 @@ async function getShopifyProductMap(channel: Channel): Promise<Map<string, { pro
                 node {
                   id
                   sku
+                  barcode
                   inventoryItem { id }
                 }
               }
@@ -161,7 +162,7 @@ async function getShopifyProductMap(channel: Channel): Promise<Map<string, { pro
         edges: Array<{
           node: {
             id: string;
-            variants: { edges: Array<{ node: { id: string; sku: string; inventoryItem: { id: string } } }> };
+            variants: { edges: Array<{ node: { id: string; sku: string; barcode: string; inventoryItem: { id: string } } }> };
           };
         }>;
       };
@@ -170,12 +171,17 @@ async function getShopifyProductMap(channel: Channel): Promise<Map<string, { pro
     for (const productEdge of data.products.edges) {
       for (const variantEdge of productEdge.node.variants.edges) {
         const v = variantEdge.node;
+        const entry = {
+          productId: productEdge.node.id,
+          variantId: v.id,
+          inventoryItemId: v.inventoryItem.id,
+        };
         if (v.sku) {
-          map.set(v.sku, {
-            productId: productEdge.node.id,
-            variantId: v.id,
-            inventoryItemId: v.inventoryItem.id,
-          });
+          map.set(v.sku, entry);
+        }
+        // Also index by barcode so EAN-based feeds can match
+        if (v.barcode && !map.has(v.barcode)) {
+          map.set(v.barcode, entry);
         }
       }
     }
