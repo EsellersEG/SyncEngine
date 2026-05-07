@@ -46,6 +46,7 @@ async function init() {
   try {
     const migrations = [
       `ALTER TABLE sync_jobs ADD COLUMN IF NOT EXISTS processed_count INT DEFAULT 0`,
+      `ALTER TABLE sync_jobs ADD COLUMN IF NOT EXISTS skipped_count INT DEFAULT 0`,
       `ALTER TABLE feeds ADD COLUMN IF NOT EXISTS type VARCHAR(20) DEFAULT 'google_sheets'`,
       `ALTER TABLE feeds ADD COLUMN IF NOT EXISTS odoo_url TEXT`,
       `ALTER TABLE feeds ADD COLUMN IF NOT EXISTS odoo_database VARCHAR(255)`,

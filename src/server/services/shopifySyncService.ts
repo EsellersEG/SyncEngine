@@ -38,7 +38,7 @@ interface AttributeMapping {
   target_field: string;
 }
 
-const BATCH_SIZE = 4; // Turbo mode parallel batch
+const BATCH_SIZE = 10; // Turbo mode parallel batch
 const INDIVIDUAL_PARALLEL_SIZE = 6; // Individual sync parallel products
 const MAX_RETRIES = 8;
 const RETRY_DELAY_MS = 2000;
@@ -194,6 +194,9 @@ async function turboSync(channel: Channel, products: ProductRow[], mappings: Att
     locationId = locData.locations.edges[0]?.node?.id;
   }
 
+  // Pre-compute metafield mappings
+  const metafieldMappings = mappings.filter(m => m.target_field.startsWith('metafield:'));
+
   for (let i = 0; i < products.length; i += BATCH_SIZE) {
     if (await isJobCancelled(jobId)) {
       console.log(`[SyncFlow] Job ${jobId} cancelled at product ${i}/${products.length}`);
@@ -201,7 +204,7 @@ async function turboSync(channel: Channel, products: ProductRow[], mappings: Att
     }
 
     const batch = products.slice(i, i + BATCH_SIZE);
-    await Promise.all(batch.map(p => syncProductTurbo(channel, p, mappings, shopifyMap, jobId, locationId)));
+    await Promise.all(batch.map(p => syncProductTurbo(channel, p, mappings, metafieldMappings, shopifyMap, jobId, locationId)));
     await query('UPDATE sync_jobs SET processed_count = $1 WHERE id = $2', [Math.min(i + BATCH_SIZE, products.length), jobId]);
   }
 }
@@ -210,6 +213,7 @@ async function syncProductTurbo(
   channel: Channel,
   product: ProductRow,
   mappings: AttributeMapping[],
+  metafieldMappings: AttributeMapping[],
   shopifyMap: Map<string, { productId: string; variantId: string; inventoryItemId: string }>,
   jobId: string,
   locationId?: string,
@@ -219,13 +223,42 @@ async function syncProductTurbo(
 
   if (!shopifyIds) {
     await logSyncEntry(jobId, product.sku, 'skipped', 'SKU not found in Shopify — use Sync All to create it');
+    await query('UPDATE sync_jobs SET skipped_count = skipped_count + 1 WHERE id = $1', [jobId]);
     return;
   }
 
   try {
     const mapped = applyMappings(product.raw_data, mappings);
 
-    // Price update via productVariantsBulkUpdate
+    // Combined: Price + Metafields in minimal API calls
+    // 1. Product update with metafields (single call)
+    if (metafieldMappings.length > 0) {
+      const metafields = metafieldMappings
+        .filter(m => product.raw_data[m.feed_column] !== undefined && product.raw_data[m.feed_column] !== null && product.raw_data[m.feed_column] !== '')
+        .map(m => {
+          const parts = m.target_field.replace('metafield:', '').split(':');
+          return {
+            namespace: parts[0],
+            key: parts[1],
+            type: parts[2] || 'single_line_text_field',
+            value: String(product.raw_data[m.feed_column]),
+          };
+        });
+      if (metafields.length > 0) {
+        const updateMutation = `
+          mutation productUpdate($input: ProductInput!) {
+            productUpdate(input: $input) {
+              product { id }
+              userErrors { field message }
+            }
+          }`;
+        await shopifyGraphQL(channel, updateMutation, {
+          input: { id: shopifyIds.productId, metafields },
+        });
+      }
+    }
+
+    // 2. Price update via productVariantsBulkUpdate
     if (mapped.price || mapped.compare_at_price) {
       const priceQuery = `
         mutation variantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
@@ -244,7 +277,7 @@ async function syncProductTurbo(
       });
     }
 
-    // Stock update
+    // 3. Stock update
     if (mapped.inventory_quantity !== undefined && locationId) {
       const stockQuery = `
         mutation inventorySetQuantities($input: InventorySetQuantitiesInput!) {
@@ -272,7 +305,7 @@ async function syncProductTurbo(
     const errMsg = String(err);
     if (errMsg.includes('Throttled') && retries < MAX_RETRIES) {
       await sleep(RETRY_DELAY_MS * (retries + 1));
-      return syncProductTurbo(channel, product, mappings, shopifyMap, jobId, locationId, retries + 1);
+      return syncProductTurbo(channel, product, mappings, metafieldMappings, shopifyMap, jobId, locationId, retries + 1);
     }
     await logSyncEntry(jobId, product.sku, 'failed', errMsg);
     await query('UPDATE sync_jobs SET failed_count = failed_count + 1 WHERE id = $1', [jobId]);

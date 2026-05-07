@@ -237,12 +237,12 @@ async function triggerAutoSync(feed: FeedRecord, changedSkus: string[]) {
 
     console.log(`[FeedService] Auto-sync triggered → Job ${jobId} for channel ${channel.name} (${changedSkus.length} changed products)`);
 
-    // Run async — only sync the changed SKUs
+    // Run async — only sync the changed SKUs using TURBO path (price+stock+meta)
     runSyncJob({
       jobId,
       channel,
       feedId: feed.id,
-      preset: 'sync_all',
+      preset: 'price_stock_meta',
       skus: changedSkus,
     }).catch(err => {
       console.error(`[FeedService] Auto-sync job ${jobId} failed:`, err);
