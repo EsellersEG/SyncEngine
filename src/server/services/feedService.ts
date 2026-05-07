@@ -46,10 +46,30 @@ export async function fetchSheetData(feed: FeedRecord): Promise<{ headers: strin
   const auth = getAuthClient(feed.service_account_json);
   const sheets = google.sheets({ version: 'v4', auth });
 
-  const response = await sheets.spreadsheets.values.get({
-    spreadsheetId: feed.spreadsheet_id,
-    range: `'${feed.sheet_name}'`,
-  });
+  let response;
+  try {
+    response = await sheets.spreadsheets.values.get({
+      spreadsheetId: feed.spreadsheet_id,
+      range: feed.sheet_name,
+    });
+  } catch (err: unknown) {
+    // If sheet name fails, list actual sheet names to help the user
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('Unable to parse range')) {
+      try {
+        const meta = await sheets.spreadsheets.get({
+          spreadsheetId: feed.spreadsheet_id,
+          fields: 'sheets.properties.title',
+        });
+        const sheetNames = meta.data.sheets?.map(s => s.properties?.title).filter(Boolean) || [];
+        throw new Error(`Sheet tab "${feed.sheet_name}" not found. Available tabs: ${sheetNames.join(', ')}`);
+      } catch (metaErr) {
+        if (metaErr instanceof Error && metaErr.message.includes('not found')) throw metaErr;
+        throw new Error(`Unable to parse range: ${feed.sheet_name}. Check that the sheet tab name is correct.`);
+      }
+    }
+    throw err;
+  }
 
   const rawRows = response.data.values || [];
   if (rawRows.length === 0) return { headers: [], rows: [] };
