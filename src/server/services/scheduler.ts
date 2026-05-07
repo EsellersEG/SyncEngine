@@ -22,7 +22,7 @@ export function startScheduler() {
           f.name as feed_name, f.type as feed_type,
           f.spreadsheet_id, f.sheet_name, f.header_row, f.service_account_json,
           f.odoo_url, f.odoo_database, f.odoo_username, f.odoo_api_key,
-          ch.name as channel_name, ch.platform, ch.shop_domain, ch.api_token,
+          ch.name as channel_name,
           c.name as client_name
          FROM automations a
          LEFT JOIN feeds f ON a.feed_id = f.id
