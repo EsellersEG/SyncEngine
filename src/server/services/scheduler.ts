@@ -81,6 +81,7 @@ export function startScheduler() {
               feedId: automation.feed_id,
               preset,
               priceAdjustmentPercent: Number(automation.price_adjustment_percent || 0),
+              priceRoundingMode: automation.rounding_mode === 'up' || automation.rounding_mode === 'down' ? automation.rounding_mode : 'none',
             }).catch(err => {
               console.error(`[Scheduler] Sync job ${jobId} failed:`, err);
             });

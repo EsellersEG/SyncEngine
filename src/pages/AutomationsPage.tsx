@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
-import { Plus, Trash2, Activity, Play, Pause } from 'lucide-react';
+import { Plus, Trash2, Activity, Play, Pause, Pencil } from 'lucide-react';
 
 interface Automation {
   id: string;
@@ -16,6 +16,7 @@ interface Automation {
   channel_name?: string;
   interval_minutes?: number;
   price_adjustment_percent?: number;
+  rounding_mode?: 'none' | 'up' | 'down';
   is_active: boolean;
   last_run_at?: string;
   created_at: string;
@@ -31,44 +32,97 @@ export default function AutomationsPage() {
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [editingAutomationId, setEditingAutomationId] = useState<string | null>(null);
   const [form, setForm] = useState({
     client_id: '', name: '', trigger_type: 'schedule' as string,
     action_type: 'import_feed' as string, feed_id: '', channel_id: '',
-    interval_minutes: '60', price_adjustment_percent: '0',
+    interval_minutes: '60', price_adjustment_percent: '0', rounding_mode: 'none' as 'none' | 'up' | 'down',
   });
   const [error, setError] = useState('');
 
-  useEffect(() => {
-    Promise.all([
-      api.get('/automations'),
-      api.get('/feeds'),
-      api.get('/channels'),
-      api.get('/clients'),
-    ]).then(([a, f, ch, cl]) => {
+  async function loadData() {
+    setLoading(true);
+    try {
+      const [a, f, ch, cl] = await Promise.all([
+        api.get('/automations'),
+        api.get('/feeds'),
+        api.get('/channels'),
+        api.get('/clients'),
+      ]);
       setAutomations(a as Automation[]);
       setFeeds(f as Feed[]);
       setChannels(ch as Channel[]);
       setClients(cl as Client[]);
-    }).finally(() => setLoading(false));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadData();
   }, []);
 
-  async function handleCreate(e: React.FormEvent) {
+  function resetForm() {
+    setForm({
+      client_id: '',
+      name: '',
+      trigger_type: 'schedule',
+      action_type: 'import_feed',
+      feed_id: '',
+      channel_id: '',
+      interval_minutes: '60',
+      price_adjustment_percent: '0',
+      rounding_mode: 'none',
+    });
+    setEditingAutomationId(null);
+    setError('');
+  }
+
+  function openCreateModal() {
+    resetForm();
+    setShowModal(true);
+  }
+
+  function openEditModal(automation: Automation) {
+    setForm({
+      client_id: automation.client_id,
+      name: automation.name,
+      trigger_type: automation.trigger_type,
+      action_type: automation.action_type,
+      feed_id: automation.feed_id || '',
+      channel_id: automation.channel_id || '',
+      interval_minutes: String(automation.interval_minutes || 60),
+      price_adjustment_percent: String(automation.price_adjustment_percent || 0),
+      rounding_mode: automation.rounding_mode || 'none',
+    });
+    setEditingAutomationId(automation.id);
+    setError('');
+    setShowModal(true);
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError('');
+    const payload = {
+      client_id: form.client_id,
+      name: form.name,
+      trigger_type: form.trigger_type,
+      action_type: form.action_type,
+      feed_id: form.feed_id || null,
+      channel_id: form.channel_id || null,
+      interval_minutes: form.trigger_type === 'schedule' ? parseInt(form.interval_minutes) : null,
+      price_adjustment_percent: form.action_type === 'sync_to_shopify' ? parseFloat(form.price_adjustment_percent || '0') : 0,
+      rounding_mode: form.action_type === 'sync_to_shopify' ? form.rounding_mode : 'none',
+    };
     try {
-      const payload = {
-        client_id: form.client_id,
-        name: form.name,
-        trigger_type: form.trigger_type,
-        action_type: form.action_type,
-        feed_id: form.feed_id || null,
-        channel_id: form.channel_id || null,
-        interval_minutes: form.trigger_type === 'schedule' ? parseInt(form.interval_minutes) : null,
-        price_adjustment_percent: form.action_type === 'sync_to_shopify' ? parseFloat(form.price_adjustment_percent || '0') : 0,
-      };
-      const created = await api.post('/automations', payload) as Automation;
-      setAutomations(prev => [created, ...prev]);
+      if (editingAutomationId) {
+        await api.patch(`/automations/${editingAutomationId}`, payload);
+      } else {
+        await api.post('/automations', payload);
+      }
+      await loadData();
       setShowModal(false);
+      resetForm();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed');
     }
@@ -103,7 +157,8 @@ export default function AutomationsPage() {
   function getActionLabel(a: Automation) {
     if (a.action_type === 'import_feed') return `Import → ${a.feed_name || 'feed'}`;
     const vat = a.price_adjustment_percent ? ` (+${a.price_adjustment_percent}% VAT)` : '';
-    return `Sync ${a.feed_name || 'feed'} → ${a.channel_name || 'Shopify'}${vat}`;
+    const rounding = a.rounding_mode === 'up' ? ' · round up' : a.rounding_mode === 'down' ? ' · round down' : '';
+    return `Sync ${a.feed_name || 'feed'} → ${a.channel_name || 'Shopify'}${vat}${rounding}`;
   }
 
   return (
@@ -114,11 +169,7 @@ export default function AutomationsPage() {
           <h1 className="page-title">Automations</h1>
           <p className="page-subtitle">Configure automatic imports and sync schedules</p>
         </div>
-        <button className="btn btn-primary" onClick={() => {
-          setForm({ client_id: '', name: '', trigger_type: 'schedule', action_type: 'import_feed', feed_id: '', channel_id: '', interval_minutes: '60', price_adjustment_percent: '0' });
-          setError('');
-          setShowModal(true);
-        }}>
+        <button className="btn btn-primary" onClick={openCreateModal}>
           <Plus size={15} /> Add Automation
         </button>
       </div>
@@ -133,7 +184,7 @@ export default function AutomationsPage() {
             <Activity size={40} color="#334155" style={{ margin: '0 auto 16px' }} />
             <p style={{ color: '#475569', fontSize: 16, fontWeight: 600, marginBottom: 8 }}>No automations configured</p>
             <p style={{ color: '#334155', fontSize: 14, marginBottom: 24 }}>Create rules to automatically import products and sync to Shopify</p>
-            <button className="btn btn-primary" onClick={() => { setForm({ client_id: '', name: '', trigger_type: 'schedule', action_type: 'import_feed', feed_id: '', channel_id: '', interval_minutes: '60', price_adjustment_percent: '0' }); setError(''); setShowModal(true); }}>
+            <button className="btn btn-primary" onClick={openCreateModal}>
               <Plus size={15} /> Add First Automation
             </button>
           </div>
@@ -172,6 +223,9 @@ export default function AutomationsPage() {
                     </td>
                     <td>
                       <div style={{ display: 'flex', gap: 6 }}>
+                        <button className="btn btn-secondary btn-sm btn-icon" onClick={() => openEditModal(a)} title="Edit">
+                          <Pencil size={12} />
+                        </button>
                         <button className="btn btn-secondary btn-sm btn-icon" onClick={() => handleToggle(a.id, a.is_active)} title={a.is_active ? 'Pause' : 'Enable'}>
                           {a.is_active ? <Pause size={12} /> : <Play size={12} />}
                         </button>
@@ -192,9 +246,9 @@ export default function AutomationsPage() {
     {showModal && (
       <div className="modal-overlay" onClick={() => setShowModal(false)}>
         <div className="modal" onClick={e => e.stopPropagation()}>
-          <h2 style={{ fontSize: 18, fontWeight: 700, color: '#e2e8f0', marginBottom: 16 }}>New Automation</h2>
+          <h2 style={{ fontSize: 18, fontWeight: 700, color: '#e2e8f0', marginBottom: 16 }}>{editingAutomationId ? 'Edit Automation' : 'New Automation'}</h2>
           {error && <div className="alert alert-danger" style={{ marginBottom: 12 }}>{error}</div>}
-          <form onSubmit={handleCreate}>
+          <form onSubmit={handleSubmit}>
             <div className="form-group">
               <label className="label">Client</label>
               <select className="input" value={form.client_id} onChange={e => setForm(f => ({ ...f, client_id: e.target.value, feed_id: '', channel_id: '' }))} required>
@@ -259,11 +313,20 @@ export default function AutomationsPage() {
                     placeholder="14" />
                   <div style={{ fontSize: 12, color: '#64748b', marginTop: 6 }}>Example: set to 14 to add 14% VAT before sending Shopify prices.</div>
                 </div>
+                <div className="form-group">
+                  <label className="label">Rounding After VAT</label>
+                  <select className="input" value={form.rounding_mode} onChange={e => setForm(f => ({ ...f, rounding_mode: e.target.value as 'none' | 'up' | 'down' }))}>
+                    <option value="none">No rounding</option>
+                    <option value="up">Round up</option>
+                    <option value="down">Round down</option>
+                  </select>
+                  <div style={{ fontSize: 12, color: '#64748b', marginTop: 6 }}>Rounds the final VAT-adjusted Shopify price to the nearest whole amount.</div>
+                </div>
               </>
             )}
             <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-              <button className="btn btn-primary" type="submit">Create</button>
-              <button className="btn btn-secondary" type="button" onClick={() => setShowModal(false)}>Cancel</button>
+              <button className="btn btn-primary" type="submit">{editingAutomationId ? 'Save Changes' : 'Create'}</button>
+              <button className="btn btn-secondary" type="button" onClick={() => { setShowModal(false); resetForm(); }}>Cancel</button>
             </div>
           </form>
         </div>

@@ -30,7 +30,17 @@ router.get('/', async (_req, res) => {
 // POST /api/automations
 router.post('/', async (req, res) => {
   try {
-    const { client_id, name, trigger_type, action_type, feed_id, channel_id, interval_minutes, price_adjustment_percent } = req.body;
+    const {
+      client_id,
+      name,
+      trigger_type,
+      action_type,
+      feed_id,
+      channel_id,
+      interval_minutes,
+      price_adjustment_percent,
+      rounding_mode,
+    } = req.body;
     if (!client_id || !name || !trigger_type || !action_type) {
       return res.status(400).json({ error: 'client_id, name, trigger_type, and action_type required' });
     }
@@ -40,10 +50,11 @@ router.post('/', async (req, res) => {
     if (action_type === 'sync_to_shopify' && (!feed_id || !channel_id)) {
       return res.status(400).json({ error: 'feed_id and channel_id required for sync_to_shopify automations' });
     }
+    const normalizedRoundingMode = rounding_mode === 'up' || rounding_mode === 'down' ? rounding_mode : 'none';
     const result = await query(
-      `INSERT INTO automations (client_id, name, trigger_type, action_type, feed_id, channel_id, interval_minutes, price_adjustment_percent)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-      [client_id, name, trigger_type, action_type, feed_id || null, channel_id || null, interval_minutes || null, price_adjustment_percent ?? 0]
+      `INSERT INTO automations (client_id, name, trigger_type, action_type, feed_id, channel_id, interval_minutes, price_adjustment_percent, rounding_mode)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+      [client_id, name, trigger_type, action_type, feed_id || null, channel_id || null, interval_minutes || null, price_adjustment_percent ?? 0, normalizedRoundingMode]
     );
     return res.status(201).json(result.rows[0]);
   } catch (err) {
@@ -55,16 +66,36 @@ router.post('/', async (req, res) => {
 // PATCH /api/automations/:id
 router.patch('/:id', async (req, res) => {
   try {
-    const { is_active, name, interval_minutes, price_adjustment_percent } = req.body;
+    const {
+      is_active,
+      name,
+      trigger_type,
+      action_type,
+      feed_id,
+      channel_id,
+      interval_minutes,
+      price_adjustment_percent,
+      rounding_mode,
+    } = req.body;
+    const normalizedRoundingMode = rounding_mode === 'up' || rounding_mode === 'down'
+      ? rounding_mode
+      : rounding_mode === 'none'
+        ? 'none'
+        : null;
     const result = await query(
       `UPDATE automations SET
         is_active = COALESCE($1, is_active),
         name = COALESCE($2, name),
-        interval_minutes = COALESCE($3, interval_minutes),
-        price_adjustment_percent = COALESCE($4, price_adjustment_percent),
+        trigger_type = COALESCE($3, trigger_type),
+        action_type = COALESCE($4, action_type),
+        feed_id = COALESCE($5, feed_id),
+        channel_id = COALESCE($6, channel_id),
+        interval_minutes = COALESCE($7, interval_minutes),
+        price_adjustment_percent = COALESCE($8, price_adjustment_percent),
+        rounding_mode = COALESCE($9, rounding_mode),
         updated_at = NOW()
-       WHERE id = $5 RETURNING *`,
-      [is_active, name, interval_minutes, price_adjustment_percent, req.params.id]
+       WHERE id = $10 RETURNING *`,
+      [is_active, name, trigger_type, action_type, feed_id, channel_id, interval_minutes, price_adjustment_percent, normalizedRoundingMode, req.params.id]
     );
     if (!result.rows[0]) return res.status(404).json({ error: 'Not found' });
     return res.json(result.rows[0]);

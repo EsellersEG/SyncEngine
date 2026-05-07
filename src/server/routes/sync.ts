@@ -34,6 +34,23 @@ router.post('/start', async (req: AuthRequest, res) => {
 
     const effectivePreset = feed.type === 'odoo' ? 'price_stock_meta' : preset;
 
+    const automationResult = await query(
+      `SELECT price_adjustment_percent, rounding_mode
+       FROM automations
+       WHERE channel_id = $1
+         AND feed_id = $2
+         AND action_type = 'sync_to_shopify'
+         AND is_active = true
+       ORDER BY CASE WHEN trigger_type = 'after_import' THEN 0 ELSE 1 END, updated_at DESC, created_at DESC
+       LIMIT 1`,
+      [channel_id, feed_id]
+    );
+    const automationConfig = automationResult.rows[0];
+    const priceAdjustmentPercent = Number(automationConfig?.price_adjustment_percent || 0);
+    const priceRoundingMode = automationConfig?.rounding_mode === 'up' || automationConfig?.rounding_mode === 'down'
+      ? automationConfig.rounding_mode
+      : 'none';
+
     // Check for already running job
     const running = await query(
       "SELECT id FROM sync_jobs WHERE channel_id = $1 AND status = 'running'",
@@ -55,7 +72,16 @@ router.post('/start', async (req: AuthRequest, res) => {
     res.json({ jobId, status: 'pending', message: 'Sync job started' });
 
     // Run async (don't await)
-    runSyncJob({ jobId, channel, feedId: feed_id, preset: effectivePreset, fields, filterRules: filter_rules }).catch(err => {
+    runSyncJob({
+      jobId,
+      channel,
+      feedId: feed_id,
+      preset: effectivePreset,
+      fields,
+      filterRules: filter_rules,
+      priceAdjustmentPercent,
+      priceRoundingMode,
+    }).catch(err => {
       console.error(`[SyncRoute] Job ${jobId} crashed:`, err);
     });
 

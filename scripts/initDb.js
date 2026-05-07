@@ -80,12 +80,14 @@ async function init() {
         channel_id UUID REFERENCES channels(id) ON DELETE SET NULL,
         interval_minutes INT,
         price_adjustment_percent DECIMAL(5,2) DEFAULT 0,
+        rounding_mode VARCHAR(20) NOT NULL DEFAULT 'none',
         is_active BOOLEAN DEFAULT true,
         last_run_at TIMESTAMPTZ,
         created_at TIMESTAMPTZ DEFAULT NOW(),
         updated_at TIMESTAMPTZ DEFAULT NOW()
       )`,
       `ALTER TABLE automations ADD COLUMN IF NOT EXISTS price_adjustment_percent DECIMAL(5,2) DEFAULT 0`,
+      `ALTER TABLE automations ADD COLUMN IF NOT EXISTS rounding_mode VARCHAR(20) NOT NULL DEFAULT 'none'`,
     ];
     for (const sql of migrations) {
       await client.query(sql);

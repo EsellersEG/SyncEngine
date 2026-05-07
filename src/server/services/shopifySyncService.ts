@@ -26,6 +26,7 @@ interface SyncJobConfig {
   filterRules?: Array<{ field: string; operator: string; value: string; logic?: string }>;
   skus?: string[]; // If provided, only sync these SKUs
   priceAdjustmentPercent?: number;
+  priceRoundingMode?: 'none' | 'up' | 'down';
 }
 
 interface ProductRow {
@@ -188,7 +189,14 @@ async function getShopifyProductMap(channel: Channel): Promise<Map<string, { pro
 }
 
 // ── Turbo Mode: parallel price/stock updates ──────────────────────────────
-async function turboSync(channel: Channel, products: ProductRow[], mappings: AttributeMapping[], jobId: string, priceAdjustmentPercent = 0) {
+async function turboSync(
+  channel: Channel,
+  products: ProductRow[],
+  mappings: AttributeMapping[],
+  jobId: string,
+  priceAdjustmentPercent = 0,
+  priceRoundingMode: 'none' | 'up' | 'down' = 'none'
+) {
   const shopifyMap = await getShopifyProductMap(channel);
 
   // Pre-resolve location once
@@ -209,7 +217,7 @@ async function turboSync(channel: Channel, products: ProductRow[], mappings: Att
     }
 
     const batch = products.slice(i, i + BATCH_SIZE);
-    await Promise.all(batch.map(p => syncProductTurbo(channel, p, mappings, metafieldMappings, shopifyMap, jobId, locationId, 0, priceAdjustmentPercent)));
+    await Promise.all(batch.map(p => syncProductTurbo(channel, p, mappings, metafieldMappings, shopifyMap, jobId, locationId, 0, priceAdjustmentPercent, priceRoundingMode)));
     await query('UPDATE sync_jobs SET processed_count = $1 WHERE id = $2', [Math.min(i + BATCH_SIZE, products.length), jobId]);
   }
 }
@@ -223,7 +231,8 @@ async function syncProductTurbo(
   jobId: string,
   locationId?: string,
   retries = 0,
-  priceAdjustmentPercent = 0
+  priceAdjustmentPercent = 0,
+  priceRoundingMode: 'none' | 'up' | 'down' = 'none'
 ): Promise<void> {
   const shopifyIds = shopifyMap.get(product.sku);
 
@@ -234,7 +243,7 @@ async function syncProductTurbo(
   }
 
   try {
-    const mapped = applyPriceAdjustment(applyMappings(product.raw_data, mappings), priceAdjustmentPercent);
+    const mapped = applyPriceAdjustment(applyMappings(product.raw_data, mappings), priceAdjustmentPercent, priceRoundingMode);
 
     // Combined: Price + Metafields in minimal API calls
     // 1. Product update with metafields (single call)
@@ -311,7 +320,7 @@ async function syncProductTurbo(
     const errMsg = String(err);
     if (errMsg.includes('Throttled') && retries < MAX_RETRIES) {
       await sleep(RETRY_DELAY_MS * (retries + 1));
-      return syncProductTurbo(channel, product, mappings, metafieldMappings, shopifyMap, jobId, locationId, retries + 1, priceAdjustmentPercent);
+      return syncProductTurbo(channel, product, mappings, metafieldMappings, shopifyMap, jobId, locationId, retries + 1, priceAdjustmentPercent, priceRoundingMode);
     }
     await logSyncEntry(jobId, product.sku, 'failed', errMsg);
     await query('UPDATE sync_jobs SET failed_count = failed_count + 1 WHERE id = $1', [jobId]);
@@ -319,7 +328,15 @@ async function syncProductTurbo(
 }
 
 // ── Individual Sync: create new + update all fields (PARALLEL) ────────────
-async function individualSync(channel: Channel, products: ProductRow[], mappings: AttributeMapping[], jobId: string, withImages: boolean, priceAdjustmentPercent = 0) {
+async function individualSync(
+  channel: Channel,
+  products: ProductRow[],
+  mappings: AttributeMapping[],
+  jobId: string,
+  withImages: boolean,
+  priceAdjustmentPercent = 0,
+  priceRoundingMode: 'none' | 'up' | 'down' = 'none'
+) {
   const shopifyMap = await getShopifyProductMap(channel);
 
   // Pre-resolve location once
@@ -345,7 +362,7 @@ async function individualSync(channel: Channel, products: ProductRow[], mappings
     }
 
     const batch = groupedProducts.slice(i, i + INDIVIDUAL_PARALLEL_SIZE);
-    await Promise.all(batch.map(group => syncGroupedProduct(channel, group, mappings, metafieldMappings, jobId, withImages, shopifyMap, locationId, priceAdjustmentPercent)));
+    await Promise.all(batch.map(group => syncGroupedProduct(channel, group, mappings, metafieldMappings, jobId, withImages, shopifyMap, locationId, priceAdjustmentPercent, priceRoundingMode)));
 
     processed += batch.reduce((sum, group) => sum + group.rows.length, 0);
     await query('UPDATE sync_jobs SET processed_count = $1 WHERE id = $2', [processed, jobId]);
@@ -362,13 +379,14 @@ async function syncGroupedProduct(
   shopifyMap: Map<string, { productId: string; variantId: string; inventoryItemId: string }>,
   locationId?: string,
   priceAdjustmentPercent = 0,
+  priceRoundingMode: 'none' | 'up' | 'down' = 'none',
 ) {
   const firstRow = group.rows[0];
 
   if (hasVariantOptions(group.rows, mappings) && group.rows.length > 1) {
     try {
       validateVariantSKUs(group.rows);
-      await syncVariantGroup(channel, group, mappings, metafieldMappings, withImages, shopifyMap, locationId, priceAdjustmentPercent);
+      await syncVariantGroup(channel, group, mappings, metafieldMappings, withImages, shopifyMap, locationId, priceAdjustmentPercent, priceRoundingMode);
       await logSyncEntry(jobId, firstRow.sku, 'updated', `Variant group synced (${group.rows.length} rows, handle: ${group.handle})`);
       await query('UPDATE sync_jobs SET updated_count = updated_count + $1 WHERE id = $2', [group.rows.length, jobId]);
     } catch (err) {
@@ -383,7 +401,7 @@ async function syncGroupedProduct(
 
   await Promise.all(group.rows.map(async (product) => {
     const shopifyIds = shopifyMap.get(product.sku);
-    const mapped = applyPriceAdjustment(applyMappings(product.raw_data, mappings), priceAdjustmentPercent);
+    const mapped = applyPriceAdjustment(applyMappings(product.raw_data, mappings), priceAdjustmentPercent, priceRoundingMode);
 
     try {
       if (!shopifyIds) {
@@ -676,8 +694,9 @@ async function syncVariantGroup(
   shopifyMap: Map<string, { productId: string; variantId: string; inventoryItemId: string }>,
   locationId?: string,
   priceAdjustmentPercent = 0,
+  priceRoundingMode: 'none' | 'up' | 'down' = 'none',
 ) {
-  const mappedRows = group.rows.map(row => ({ row, mapped: applyPriceAdjustment(applyMappings(row.raw_data, mappings), priceAdjustmentPercent) }));
+  const mappedRows = group.rows.map(row => ({ row, mapped: applyPriceAdjustment(applyMappings(row.raw_data, mappings), priceAdjustmentPercent, priceRoundingMode) }));
   const first = mappedRows[0];
   const distinctProductIds = new Set(
     group.rows
@@ -798,8 +817,12 @@ async function syncVariantGroup(
   }
 }
 
-function applyPriceAdjustment(mapped: Record<string, unknown>, priceAdjustmentPercent = 0): Record<string, unknown> {
-  if (!priceAdjustmentPercent) return mapped;
+function applyPriceAdjustment(
+  mapped: Record<string, unknown>,
+  priceAdjustmentPercent = 0,
+  priceRoundingMode: 'none' | 'up' | 'down' = 'none'
+): Record<string, unknown> {
+  if (!priceAdjustmentPercent && priceRoundingMode === 'none') return mapped;
 
   const adjusted = { ...mapped };
   for (const field of ['price', 'compare_at_price']) {
@@ -807,7 +830,13 @@ function applyPriceAdjustment(mapped: Record<string, unknown>, priceAdjustmentPe
     if (current === undefined || current === null || current === '') continue;
     const numeric = Number(current);
     if (Number.isFinite(numeric)) {
-      adjusted[field] = (numeric * (1 + (priceAdjustmentPercent / 100))).toFixed(2);
+      let nextValue = numeric * (1 + (priceAdjustmentPercent / 100));
+      if (priceRoundingMode === 'up') {
+        nextValue = Math.ceil(nextValue);
+      } else if (priceRoundingMode === 'down') {
+        nextValue = Math.floor(nextValue);
+      }
+      adjusted[field] = nextValue.toFixed(2);
     }
   }
   return adjusted;
@@ -859,7 +888,16 @@ function evaluateFilterRules(rawData: Record<string, unknown>, rules: Array<{ fi
 
 // ── Main Entry Point ───────────────────────────────────────────────────────
 export async function runSyncJob(config: SyncJobConfig) {
-  const { jobId, channel, feedId, preset, filterRules, skus, priceAdjustmentPercent = 0 } = config;
+  const {
+    jobId,
+    channel,
+    feedId,
+    preset,
+    filterRules,
+    skus,
+    priceAdjustmentPercent = 0,
+    priceRoundingMode = 'none',
+  } = config;
 
   try {
     await query("UPDATE sync_jobs SET status = 'running', started_at = NOW() WHERE id = $1", [jobId]);
@@ -900,13 +938,13 @@ export async function runSyncJob(config: SyncJobConfig) {
 
     if (preset === 'price_stock_meta' || (config.fields && config.fields.every(f => ['price', 'stock', 'metafields'].includes(f)))) {
       console.log('[SyncFlow] Pathway: TURBO');
-      await turboSync(channel, products, mappings, jobId, priceAdjustmentPercent);
+      await turboSync(channel, products, mappings, jobId, priceAdjustmentPercent, priceRoundingMode);
     } else if (products.length < 50) {
       console.log('[SyncFlow] Pathway: INDIVIDUAL');
-      await individualSync(channel, products, mappings, jobId, preset !== 'sync_all_no_images', priceAdjustmentPercent);
+      await individualSync(channel, products, mappings, jobId, preset !== 'sync_all_no_images', priceAdjustmentPercent, priceRoundingMode);
     } else {
       console.log('[SyncFlow] Pathway: INDIVIDUAL (large batch, parallel)');
-      await individualSync(channel, products, mappings, jobId, preset === 'sync_all', priceAdjustmentPercent);
+      await individualSync(channel, products, mappings, jobId, preset === 'sync_all', priceAdjustmentPercent, priceRoundingMode);
     }
 
     // Don't mark complete if cancelled

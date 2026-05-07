@@ -292,6 +292,7 @@ async function triggerAutoSync(feed: FeedRecord, changedSkus: string[]) {
       preset,
       skus: changedSkus,
       priceAdjustmentPercent: Number(automation.price_adjustment_percent || 0),
+      priceRoundingMode: automation.rounding_mode === 'up' || automation.rounding_mode === 'down' ? automation.rounding_mode : 'none',
     }).catch(err => {
       console.error(`[FeedService] Auto-sync job ${jobId} failed:`, err);
     });

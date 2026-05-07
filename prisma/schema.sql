@@ -172,3 +172,24 @@ CREATE TABLE orders (
 CREATE INDEX idx_orders_client ON orders(client_id);
 CREATE INDEX idx_orders_channel ON orders(channel_id);
 CREATE INDEX idx_orders_status ON orders(status);
+
+-- Automations
+CREATE TABLE automations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  name VARCHAR(255) NOT NULL,
+  trigger_type VARCHAR(50) NOT NULL DEFAULT 'schedule',
+  action_type VARCHAR(50) NOT NULL DEFAULT 'import_feed',
+  feed_id UUID REFERENCES feeds(id) ON DELETE SET NULL,
+  channel_id UUID REFERENCES channels(id) ON DELETE SET NULL,
+  interval_minutes INT,
+  price_adjustment_percent DECIMAL(5,2) DEFAULT 0,
+  rounding_mode VARCHAR(20) NOT NULL DEFAULT 'none',
+  is_active BOOLEAN DEFAULT TRUE,
+  last_run_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX idx_automations_client ON automations(client_id);
+CREATE INDEX idx_automations_feed ON automations(feed_id);
+CREATE INDEX idx_automations_channel ON automations(channel_id);
