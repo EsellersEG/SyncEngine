@@ -20,15 +20,17 @@ function verifyShopifyHmac(body: string, hmacHeader: string, secret: string): bo
 // POST /webhooks/shopify/orders — Shopify order created webhook
 router.post('/shopify/orders', async (req: Request, res: Response) => {
   const hmac = req.headers['x-shopify-hmac-sha256'] as string;
-  const shopDomain = req.headers['x-shopify-shop-domain'] as string;
+  const shopDomain = (req.headers['x-shopify-shop-domain'] as string || '').trim().toLowerCase();
+
+  console.log(`[Webhook] Received order webhook from shop: ${shopDomain}`);
 
   // Respond immediately (Shopify requires fast response)
   res.status(200).json({ received: true });
 
   try {
-    // Find channel by shop domain
+    // Find channel by shop domain (normalize: strip https://, trim, lowercase)
     const channelResult = await query(
-      "SELECT c.*, cl.odoo_config FROM channels c LEFT JOIN clients cl ON c.client_id = cl.id WHERE c.shopify_store_url = $1 AND c.type = 'shopify'",
+      "SELECT c.*, cl.odoo_config FROM channels c LEFT JOIN clients cl ON c.client_id = cl.id WHERE LOWER(TRIM(REPLACE(REPLACE(c.shopify_store_url, 'https://', ''), 'http://', ''))) = $1 AND c.type = 'shopify'",
       [shopDomain]
     );
     const channel = channelResult.rows[0];
@@ -36,6 +38,8 @@ router.post('/shopify/orders', async (req: Request, res: Response) => {
       console.warn(`[Webhook] No channel found for shop: ${shopDomain}`);
       return;
     }
+    console.log(`[Webhook] Matched channel: ${channel.name} (id: ${channel.id})`);
+
 
     // Verify HMAC if we have a webhook secret in channel settings
     if (channel.settings?.webhook_secret && hmac) {
