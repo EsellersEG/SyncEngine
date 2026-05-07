@@ -7,7 +7,7 @@ interface Feed {
   id: string; client_id: string; name: string; type: string; spreadsheet_id: string;
   sheet_name: string; is_active: boolean; last_sync_at: string | null;
   last_row_count: number; product_count: string; created_at: string;
-  odoo_url?: string; odoo_database?: string; odoo_username?: string;
+  odoo_url?: string; odoo_database?: string; odoo_username?: string; odoo_api_key?: string;
   sync_interval_minutes?: number | null;
 }
 interface Client { id: string; name: string; }
@@ -343,7 +343,7 @@ export default function FeedsPage() {
                     </div>
                     <div className="form-group">
                       <label className="label">API Key</label>
-                      <input className="input" type="password" placeholder="••••••••" value={form.odoo_api_key}
+                      <input className="input" type="password" placeholder={editingFeed && editingFeed.odoo_api_key ? `${editingFeed.odoo_api_key.substring(0, 3)}${'*'.repeat(20)}` : '••••••••'} value={form.odoo_api_key}
                         onChange={e => setForm(f => ({ ...f, odoo_api_key: e.target.value }))} required={!editingFeed} />
                     </div>
                   </div>
