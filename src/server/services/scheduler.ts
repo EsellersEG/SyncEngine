@@ -30,7 +30,7 @@ export function startScheduler() {
       for (const feed of result.rows) {
         console.log(`[Scheduler] Auto-importing feed: ${feed.name} (${feed.client_name})`);
         try {
-          await importFeedProducts(feed);
+          await importFeedProducts(feed.id);
         } catch (err) {
           console.error(`[Scheduler] Failed to import feed ${feed.name}:`, err);
         }
