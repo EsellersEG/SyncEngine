@@ -30,7 +30,7 @@ router.post('/shopify/orders', async (req: Request, res: Response) => {
   try {
     // Find channel by shop domain (normalize: strip https://, trim, lowercase)
     const channelResult = await query(
-      "SELECT c.*, cl.odoo_config FROM channels c LEFT JOIN clients cl ON c.client_id = cl.id WHERE LOWER(TRIM(REPLACE(REPLACE(c.shopify_store_url, 'https://', ''), 'http://', ''))) = $1 AND c.type = 'shopify'",
+      "SELECT c.* FROM channels c WHERE LOWER(TRIM(REPLACE(REPLACE(c.shopify_store_url, 'https://', ''), 'http://', ''))) = $1 AND c.type = 'shopify'",
       [shopDomain]
     );
     const channel = channelResult.rows[0];
@@ -71,31 +71,24 @@ router.post('/shopify/orders', async (req: Request, res: Response) => {
       [channel.client_id, channel.id, shopifyOrderId, orderNumber, order.total_price, order.email, JSON.stringify(order)]
     );
 
-    // Sync to Odoo if config exists
-    const odooConfig = channel.odoo_config as OdooConfig | null;
-    if (!odooConfig || !odooConfig.url) {
-      // Try to get Odoo config from an Odoo feed for this client
-      const feedResult = await query(
-        "SELECT odoo_url, odoo_database, odoo_username, odoo_api_key, odoo_search_by FROM feeds WHERE client_id = $1 AND type = 'odoo' LIMIT 1",
-        [channel.client_id]
-      );
-      const odooFeed = feedResult.rows[0];
-      if (!odooFeed) {
-        console.log(`[Webhook] No Odoo config found for order ${orderNumber}, saved as pending`);
-        return;
-      }
-      // Use feed's Odoo config
-      const config: OdooConfig = {
-        url: odooFeed.odoo_url,
-        database: odooFeed.odoo_database,
-        username: odooFeed.odoo_username,
-        apiKey: odooFeed.odoo_api_key,
-        productSearchBy: odooFeed.odoo_search_by || 'automatic',
-      };
-      await syncOrderToOdoo(channel.id, shopifyOrderId, order, config);
-    } else {
-      await syncOrderToOdoo(channel.id, shopifyOrderId, order, odooConfig);
+    // Sync to Odoo if config exists (get from Odoo feed for this client)
+    const feedResult = await query(
+      "SELECT odoo_url, odoo_database, odoo_username, odoo_api_key, odoo_search_by FROM feeds WHERE client_id = $1 AND type = 'odoo' LIMIT 1",
+      [channel.client_id]
+    );
+    const odooFeed = feedResult.rows[0];
+    if (!odooFeed) {
+      console.log(`[Webhook] No Odoo config found for order ${orderNumber}, saved as pending`);
+      return;
     }
+    const config: OdooConfig = {
+      url: odooFeed.odoo_url,
+      database: odooFeed.odoo_database,
+      username: odooFeed.odoo_username,
+      apiKey: odooFeed.odoo_api_key,
+      productSearchBy: odooFeed.odoo_search_by || 'automatic',
+    };
+    await syncOrderToOdoo(channel.id, shopifyOrderId, order, config);
   } catch (err) {
     console.error('[Webhook] Error processing order:', err);
   }
