@@ -203,8 +203,9 @@ export async function importFeedProducts(feed: FeedRecord) {
 
     console.log(`[FeedService] Import complete — created: ${created}, updated: ${updated}, skipped: ${skipped}`);
 
-    // Auto-sync changed products to Shopify if any were created or updated
-    if (changedSkus.length > 0 && feed.client_id) {
+    // Notify after_import automations on every completed import.
+    // If nothing changed, we still update the automation run timestamp.
+    if (feed.client_id) {
       triggerAutoSync(feed, changedSkus).catch(err => {
         console.error('[FeedService] Auto-sync trigger failed:', err);
       });
@@ -242,6 +243,16 @@ async function triggerAutoSync(feed: FeedRecord, changedSkus: string[]) {
     return;
   }
 
+  await query(
+    'UPDATE automations SET last_run_at = NOW() WHERE feed_id = $1 AND trigger_type = $2 AND action_type = $3 AND is_active = true',
+    [feed.id, 'after_import', 'sync_to_shopify']
+  );
+
+  if (changedSkus.length === 0) {
+    console.log('[FeedService] Import completed with no changed SKUs; after_import automations marked as run but no Shopify sync job was created');
+    return;
+  }
+
   for (const automation of automationsResult.rows) {
     const channelId = automation.ch_id;
     const channelName = automation.ch_name;
@@ -267,10 +278,6 @@ async function triggerAutoSync(feed: FeedRecord, changedSkus: string[]) {
     const jobId = jobResult.rows[0].id;
 
     console.log(`[FeedService] Auto-sync triggered → Job ${jobId} for channel ${channelName} (${changedSkus.length} changed products)`);
-
-    // Update last_run_at on the automation
-    await query('UPDATE automations SET last_run_at = NOW() WHERE id = $1', [automation.id]);
-
     // Run async
     runSyncJob({
       jobId,
