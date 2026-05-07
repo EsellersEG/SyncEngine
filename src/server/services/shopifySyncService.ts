@@ -39,10 +39,9 @@ interface AttributeMapping {
 }
 
 const BATCH_SIZE = 10; // Turbo mode parallel batch
-const INDIVIDUAL_PARALLEL_SIZE = 6; // Individual sync parallel products
+const INDIVIDUAL_PARALLEL_SIZE = 12; // Individual sync parallel products
 const MAX_RETRIES = 8;
 const RETRY_DELAY_MS = 2000;
-const REST_CALL_DELAY_MS = 550;
 
 // ── Cancellation tracking ──────────────────────────────────────────────────
 const cancelledJobs = new Set<string>();
@@ -347,11 +346,14 @@ async function individualSync(channel: Channel, products: ProductRow[], mappings
           await logSyncEntry(jobId, product.sku, 'created', 'New product created in Shopify');
           await query('UPDATE sync_jobs SET created_count = created_count + 1 WHERE id = $1', [jobId]);
         } else {
-          // UPDATE product fields + metafields in ONE call
+          // UPDATE existing product — run independent API calls in PARALLEL
+          const updatePromises: Promise<unknown>[] = [];
+
+          // 1. Product fields + metafields (single call)
           const updateMutation = `
             mutation productUpdate($input: ProductInput!) {
               productUpdate(input: $input) {
-                product { id title }
+                product { id }
                 userErrors { field message }
               }
             }`;
@@ -362,7 +364,7 @@ async function individualSync(channel: Channel, products: ProductRow[], mappings
           if (mapped.vendor) input.vendor = mapped.vendor;
           if (mapped.status) input.status = String(mapped.status).toUpperCase();
 
-          // Merge metafields into same update call (saves 1 API call per product)
+          // Merge metafields into same update call
           if (metafieldMappings.length > 0) {
             const metafields = metafieldMappings
               .filter(m => product.raw_data[m.feed_column] !== undefined && product.raw_data[m.feed_column] !== null && product.raw_data[m.feed_column] !== '')
@@ -380,10 +382,13 @@ async function individualSync(channel: Channel, products: ProductRow[], mappings
             }
           }
 
-          await shopifyGraphQL(channel, updateMutation, { input });
+          // Only call productUpdate if there's something to update
+          if (Object.keys(input).length > 1) {
+            updatePromises.push(shopifyGraphQL(channel, updateMutation, { input }));
+          }
 
-          // UPDATE variant price/sku
-          if (mapped.price || mapped.compare_at_price || mapped.sku) {
+          // 2. Variant price update (parallel)
+          if (mapped.price || mapped.compare_at_price) {
             const variantMutation = `
               mutation variantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
                 productVariantsBulkUpdate(productId: $productId, variants: $variants) {
@@ -394,13 +399,35 @@ async function individualSync(channel: Channel, products: ProductRow[], mappings
             const variantInput: Record<string, unknown> = { id: shopifyIds.variantId };
             if (mapped.price) variantInput.price = String(mapped.price);
             if (mapped.compare_at_price) variantInput.compareAtPrice = String(mapped.compare_at_price);
-            await shopifyGraphQL(channel, variantMutation, {
+            updatePromises.push(shopifyGraphQL(channel, variantMutation, {
               productId: shopifyIds.productId,
               variants: [variantInput],
-            });
+            }));
           }
 
-          // UPDATE images if provided
+          // 3. Stock update (parallel)
+          if (mapped.inventory_quantity !== undefined && locationId) {
+            const stockQuery = `
+              mutation inventorySetQuantities($input: InventorySetQuantitiesInput!) {
+                inventorySetQuantities(input: $input) {
+                  inventoryAdjustmentGroup { reason }
+                  userErrors { field message }
+                }
+              }`;
+            updatePromises.push(shopifyGraphQL(channel, stockQuery, {
+              input: {
+                name: "available",
+                reason: "correction",
+                quantities: [{
+                  inventoryItemId: shopifyIds.inventoryItemId,
+                  locationId,
+                  quantity: parseInt(String(mapped.inventory_quantity)),
+                }],
+              },
+            }));
+          }
+
+          // 4. Images (parallel, only if withImages and URL provided)
           if (withImages && mapped.image_url) {
             const urls = String(mapped.image_url).split(',').map(u => u.trim()).filter(Boolean);
             if (urls.length > 0) {
@@ -411,34 +438,15 @@ async function individualSync(channel: Channel, products: ProductRow[], mappings
                     mediaUserErrors { field message }
                   }
                 }`;
-              await shopifyGraphQL(channel, mediaMutation, {
+              updatePromises.push(shopifyGraphQL(channel, mediaMutation, {
                 productId: shopifyIds.productId,
                 media: urls.map(url => ({ originalSource: url, mediaContentType: 'IMAGE' })),
-              });
+              }));
             }
           }
 
-          // UPDATE stock
-          if (mapped.inventory_quantity !== undefined && locationId) {
-            const stockQuery = `
-              mutation inventorySetQuantities($input: InventorySetQuantitiesInput!) {
-                inventorySetQuantities(input: $input) {
-                  inventoryAdjustmentGroup { reason }
-                  userErrors { field message }
-                }
-              }`;
-            await shopifyGraphQL(channel, stockQuery, {
-              input: {
-                name: "available",
-                reason: "correction",
-                quantities: [{
-                  inventoryItemId: shopifyIds.inventoryItemId,
-                  locationId,
-                  quantity: parseInt(String(mapped.inventory_quantity)),
-                }],
-              },
-            });
-          }
+          // Execute all updates in parallel
+          await Promise.all(updatePromises);
 
           await logSyncEntry(jobId, product.sku, 'updated', 'Full sync succeeded');
           await query('UPDATE sync_jobs SET updated_count = updated_count + 1 WHERE id = $1', [jobId]);
