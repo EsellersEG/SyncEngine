@@ -24,6 +24,7 @@ interface SyncJobConfig {
   preset: 'price_stock_meta' | 'sync_all_no_images' | 'sync_all' | 'custom';
   fields?: string[];
   filterRules?: Array<{ field: string; operator: string; value: string; logic?: string }>;
+  skus?: string[]; // If provided, only sync these SKUs
 }
 
 interface ProductRow {
@@ -580,16 +581,26 @@ function evaluateFilterRules(rawData: Record<string, unknown>, rules: Array<{ fi
 
 // ── Main Entry Point ───────────────────────────────────────────────────────
 export async function runSyncJob(config: SyncJobConfig) {
-  const { jobId, channel, feedId, preset, filterRules } = config;
+  const { jobId, channel, feedId, preset, filterRules, skus } = config;
 
   try {
     await query("UPDATE sync_jobs SET status = 'running', started_at = NOW() WHERE id = $1", [jobId]);
 
-    const productsResult = await query(
-      'SELECT sku, raw_data FROM products WHERE feed_id = $1 AND status = $2',
-      [feedId, 'active']
-    );
-    let products: ProductRow[] = productsResult.rows;
+    let products: ProductRow[];
+    if (skus && skus.length > 0) {
+      // Only fetch specific SKUs (auto-sync for changed products)
+      const productsResult = await query(
+        'SELECT sku, raw_data FROM products WHERE feed_id = $1 AND status = $2 AND sku = ANY($3)',
+        [feedId, 'active', skus]
+      );
+      products = productsResult.rows;
+    } else {
+      const productsResult = await query(
+        'SELECT sku, raw_data FROM products WHERE feed_id = $1 AND status = $2',
+        [feedId, 'active']
+      );
+      products = productsResult.rows;
+    }
 
     if (filterRules && filterRules.length > 0) {
       products = products.filter(p => evaluateFilterRules(p.raw_data, filterRules));

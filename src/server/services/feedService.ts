@@ -128,6 +128,7 @@ export async function importFeedProducts(feed: FeedRecord) {
     let created = 0;
     let updated = 0;
     let skipped = 0;
+    const changedSkus: string[] = [];
 
     for (const row of rows) {
       const sku = String(row[skuColumn] || '').trim();
@@ -152,6 +153,7 @@ export async function importFeedProducts(feed: FeedRecord) {
               [fingerprint, JSON.stringify(row), existing.rows[0].id]
             );
             updated++;
+            changedSkus.push(sku);
           }
         } else {
           await query(
@@ -160,6 +162,7 @@ export async function importFeedProducts(feed: FeedRecord) {
             [feed.client_id, feed.id, sku, fingerprint, JSON.stringify(row)]
           );
           created++;
+          changedSkus.push(sku);
         }
       } catch (err) {
         console.error(`[FeedService] Error processing SKU ${sku}:`, err);
@@ -181,8 +184,8 @@ export async function importFeedProducts(feed: FeedRecord) {
     console.log(`[FeedService] Import complete — created: ${created}, updated: ${updated}, skipped: ${skipped}`);
 
     // Auto-sync changed products to Shopify if any were created or updated
-    if ((created > 0 || updated > 0) && feed.client_id) {
-      triggerAutoSync(feed).catch(err => {
+    if (changedSkus.length > 0 && feed.client_id) {
+      triggerAutoSync(feed, changedSkus).catch(err => {
         console.error('[FeedService] Auto-sync trigger failed:', err);
       });
     }
@@ -197,10 +200,10 @@ export async function importFeedProducts(feed: FeedRecord) {
 }
 
 /**
- * Auto-sync updated/created products to all Shopify channels for this client.
- * Creates a sync job with preset 'sync_all' that will push changes to Shopify.
+ * Auto-sync only the changed/created products to all Shopify channels for this client.
+ * Only the SKUs that were updated or created during import are synced.
  */
-async function triggerAutoSync(feed: FeedRecord) {
+async function triggerAutoSync(feed: FeedRecord, changedSkus: string[]) {
   // Find all active Shopify channels for this client
   const channelsResult = await query(
     "SELECT * FROM channels WHERE client_id = $1 AND type = 'shopify' AND status = 'active'",
@@ -225,21 +228,22 @@ async function triggerAutoSync(feed: FeedRecord) {
 
     // Create a sync job
     const jobResult = await query(
-      `INSERT INTO sync_jobs (channel_id, feed_id, preset, status)
-       VALUES ($1, $2, 'sync_all', 'pending')
+      `INSERT INTO sync_jobs (channel_id, feed_id, preset, total_products, status)
+       VALUES ($1, $2, 'sync_all', $3, 'pending')
        RETURNING id`,
-      [channel.id, feed.id]
+      [channel.id, feed.id, changedSkus.length]
     );
     const jobId = jobResult.rows[0].id;
 
-    console.log(`[FeedService] Auto-sync triggered → Job ${jobId} for channel ${channel.name}`);
+    console.log(`[FeedService] Auto-sync triggered → Job ${jobId} for channel ${channel.name} (${changedSkus.length} changed products)`);
 
-    // Run async
+    // Run async — only sync the changed SKUs
     runSyncJob({
       jobId,
       channel,
       feedId: feed.id,
       preset: 'sync_all',
+      skus: changedSkus,
     }).catch(err => {
       console.error(`[FeedService] Auto-sync job ${jobId} failed:`, err);
     });
