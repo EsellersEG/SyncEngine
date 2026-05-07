@@ -54,16 +54,23 @@ router.post('/', async (req: AuthRequest, res) => {
 // PATCH /api/feeds/:id
 router.patch('/:id', async (req, res) => {
   try {
-    const { name, sheet_name, header_row, is_active } = req.body;
+    const { name, type, spreadsheet_id, sheet_name, header_row, is_active, odoo_url, odoo_database, odoo_username, odoo_api_key, sync_interval_minutes } = req.body;
     const result = await query(
       `UPDATE feeds SET
         name = COALESCE($1, name),
-        sheet_name = COALESCE($2, sheet_name),
-        header_row = COALESCE($3, header_row),
-        is_active = COALESCE($4, is_active),
+        type = COALESCE($2, type),
+        spreadsheet_id = COALESCE($3, spreadsheet_id),
+        sheet_name = COALESCE($4, sheet_name),
+        header_row = COALESCE($5, header_row),
+        is_active = COALESCE($6, is_active),
+        odoo_url = COALESCE($7, odoo_url),
+        odoo_database = COALESCE($8, odoo_database),
+        odoo_username = COALESCE($9, odoo_username),
+        odoo_api_key = COALESCE($10, odoo_api_key),
+        sync_interval_minutes = $11,
         updated_at = NOW()
-       WHERE id = $5 RETURNING *`,
-      [name, sheet_name, header_row, is_active, req.params.id]
+       WHERE id = $12 RETURNING *`,
+      [name, type, spreadsheet_id, sheet_name, header_row, is_active, odoo_url, odoo_database, odoo_username, odoo_api_key, sync_interval_minutes ?? null, req.params.id]
     );
     if (!result.rows[0]) return res.status(404).json({ error: 'Feed not found' });
     return res.json(result.rows[0]);
