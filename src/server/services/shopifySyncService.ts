@@ -34,6 +34,11 @@ interface ProductRow {
   [key: string]: unknown;
 }
 
+interface GroupedProduct {
+  handle: string;
+  rows: ProductRow[];
+}
+
 interface AttributeMapping {
   feed_column: string;
   target_field: string;
@@ -328,140 +333,165 @@ async function individualSync(channel: Channel, products: ProductRow[], mappings
   // Pre-compute metafield mappings once
   const metafieldMappings = mappings.filter(m => m.target_field.startsWith('metafield:'));
 
+  const groupedProducts = groupRowsByHandle(products, mappings);
+
   let processed = 0;
 
   // Process in parallel batches (6 products at a time)
-  for (let i = 0; i < products.length; i += INDIVIDUAL_PARALLEL_SIZE) {
+  for (let i = 0; i < groupedProducts.length; i += INDIVIDUAL_PARALLEL_SIZE) {
     if (await isJobCancelled(jobId)) {
-      console.log(`[SyncFlow] Job ${jobId} cancelled at product ${i}/${products.length}`);
+      console.log(`[SyncFlow] Job ${jobId} cancelled at product group ${i}/${groupedProducts.length}`);
       return;
     }
 
-    const batch = products.slice(i, i + INDIVIDUAL_PARALLEL_SIZE);
-    await Promise.all(batch.map(async (product) => {
-      const shopifyIds = shopifyMap.get(product.sku);
-      const mapped = applyPriceAdjustment(applyMappings(product.raw_data, mappings), priceAdjustmentPercent);
+    const batch = groupedProducts.slice(i, i + INDIVIDUAL_PARALLEL_SIZE);
+    await Promise.all(batch.map(group => syncGroupedProduct(channel, group, mappings, metafieldMappings, jobId, withImages, shopifyMap, locationId, priceAdjustmentPercent)));
 
-      try {
-        if (!shopifyIds) {
-          await createShopifyProduct(channel, product.sku, mapped, withImages, mappings, product.raw_data);
-          await logSyncEntry(jobId, product.sku, 'created', 'New product created in Shopify');
-          await query('UPDATE sync_jobs SET created_count = created_count + 1 WHERE id = $1', [jobId]);
-        } else {
-          // UPDATE existing product — run independent API calls in PARALLEL
-          const updatePromises: Promise<unknown>[] = [];
+    processed += batch.reduce((sum, group) => sum + group.rows.length, 0);
+    await query('UPDATE sync_jobs SET processed_count = $1 WHERE id = $2', [processed, jobId]);
+  }
+}
 
-          // 1. Product fields + metafields (single call)
-          const updateMutation = `
-            mutation productUpdate($input: ProductInput!) {
-              productUpdate(input: $input) {
-                product { id }
+async function syncGroupedProduct(
+  channel: Channel,
+  group: GroupedProduct,
+  mappings: AttributeMapping[],
+  metafieldMappings: AttributeMapping[],
+  jobId: string,
+  withImages: boolean,
+  shopifyMap: Map<string, { productId: string; variantId: string; inventoryItemId: string }>,
+  locationId?: string,
+  priceAdjustmentPercent = 0,
+) {
+  const firstRow = group.rows[0];
+
+  if (hasVariantOptions(group.rows, mappings) && group.rows.length > 1) {
+    try {
+      validateVariantSKUs(group.rows);
+      await syncVariantGroup(channel, group, mappings, metafieldMappings, withImages, shopifyMap, locationId, priceAdjustmentPercent);
+      await logSyncEntry(jobId, firstRow.sku, 'updated', `Variant group synced (${group.rows.length} rows, handle: ${group.handle})`);
+      await query('UPDATE sync_jobs SET updated_count = updated_count + $1 WHERE id = $2', [group.rows.length, jobId]);
+    } catch (err) {
+      const message = String(err);
+      for (const row of group.rows) {
+        await logSyncEntry(jobId, row.sku, 'failed', message);
+      }
+      await query('UPDATE sync_jobs SET failed_count = failed_count + $1 WHERE id = $2', [group.rows.length, jobId]);
+    }
+    return;
+  }
+
+  await Promise.all(group.rows.map(async (product) => {
+    const shopifyIds = shopifyMap.get(product.sku);
+    const mapped = applyPriceAdjustment(applyMappings(product.raw_data, mappings), priceAdjustmentPercent);
+
+    try {
+      if (!shopifyIds) {
+        await createShopifyProduct(channel, product.sku, mapped, withImages, mappings, product.raw_data);
+        await logSyncEntry(jobId, product.sku, 'created', 'New product created in Shopify');
+        await query('UPDATE sync_jobs SET created_count = created_count + 1 WHERE id = $1', [jobId]);
+      } else {
+        const updatePromises: Promise<unknown>[] = [];
+        const updateMutation = `
+          mutation productUpdate($input: ProductInput!) {
+            productUpdate(input: $input) {
+              product { id }
+              userErrors { field message }
+            }
+          }`;
+        const input: Record<string, unknown> = { id: shopifyIds.productId };
+        if (mapped.title) input.title = mapped.title;
+        if (mapped.body_html) input.descriptionHtml = mapped.body_html;
+        if (mapped.tags) input.tags = String(mapped.tags).split(',').map(t => t.trim());
+        if (mapped.vendor) input.vendor = mapped.vendor;
+        if (mapped.status) input.status = String(mapped.status).toUpperCase();
+
+        if (metafieldMappings.length > 0) {
+          const metafields = metafieldMappings
+            .filter(m => product.raw_data[m.feed_column] !== undefined && product.raw_data[m.feed_column] !== null && product.raw_data[m.feed_column] !== '')
+            .map(m => {
+              const parts = m.target_field.replace('metafield:', '').split(':');
+              return {
+                namespace: parts[0],
+                key: parts[1],
+                type: parts[2] || 'single_line_text_field',
+                value: String(product.raw_data[m.feed_column]),
+              };
+            });
+          if (metafields.length > 0) {
+            input.metafields = metafields;
+          }
+        }
+
+        if (Object.keys(input).length > 1) {
+          updatePromises.push(shopifyGraphQL(channel, updateMutation, { input }));
+        }
+
+        if (mapped.price || mapped.compare_at_price) {
+          const variantMutation = `
+            mutation variantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+              productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+                productVariants { id }
                 userErrors { field message }
               }
             }`;
-          const input: Record<string, unknown> = { id: shopifyIds.productId };
-          if (mapped.title) input.title = mapped.title;
-          if (mapped.body_html) input.descriptionHtml = mapped.body_html;
-          if (mapped.tags) input.tags = String(mapped.tags).split(',').map(t => t.trim());
-          if (mapped.vendor) input.vendor = mapped.vendor;
-          if (mapped.status) input.status = String(mapped.status).toUpperCase();
-
-          // Merge metafields into same update call
-          if (metafieldMappings.length > 0) {
-            const metafields = metafieldMappings
-              .filter(m => product.raw_data[m.feed_column] !== undefined && product.raw_data[m.feed_column] !== null && product.raw_data[m.feed_column] !== '')
-              .map(m => {
-                const parts = m.target_field.replace('metafield:', '').split(':');
-                return {
-                  namespace: parts[0],
-                  key: parts[1],
-                  type: parts[2] || 'single_line_text_field',
-                  value: String(product.raw_data[m.feed_column]),
-                };
-              });
-            if (metafields.length > 0) {
-              input.metafields = metafields;
-            }
-          }
-
-          // Only call productUpdate if there's something to update
-          if (Object.keys(input).length > 1) {
-            updatePromises.push(shopifyGraphQL(channel, updateMutation, { input }));
-          }
-
-          // 2. Variant price update (parallel)
-          if (mapped.price || mapped.compare_at_price) {
-            const variantMutation = `
-              mutation variantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
-                productVariantsBulkUpdate(productId: $productId, variants: $variants) {
-                  productVariants { id }
-                  userErrors { field message }
-                }
-              }`;
-            const variantInput: Record<string, unknown> = { id: shopifyIds.variantId };
-            if (mapped.price) variantInput.price = String(mapped.price);
-            if (mapped.compare_at_price) variantInput.compareAtPrice = String(mapped.compare_at_price);
-            updatePromises.push(shopifyGraphQL(channel, variantMutation, {
-              productId: shopifyIds.productId,
-              variants: [variantInput],
-            }));
-          }
-
-          // 3. Stock update (parallel)
-          if (mapped.inventory_quantity !== undefined && locationId) {
-            const stockQuery = `
-              mutation inventorySetQuantities($input: InventorySetQuantitiesInput!) {
-                inventorySetQuantities(input: $input) {
-                  inventoryAdjustmentGroup { reason }
-                  userErrors { field message }
-                }
-              }`;
-            updatePromises.push(shopifyGraphQL(channel, stockQuery, {
-              input: {
-                name: "available",
-                reason: "correction",
-                quantities: [{
-                  inventoryItemId: shopifyIds.inventoryItemId,
-                  locationId,
-                  quantity: parseInt(String(mapped.inventory_quantity)),
-                }],
-              },
-            }));
-          }
-
-          // 4. Images (parallel, only if withImages and URL provided)
-          if (withImages && mapped.image_url) {
-            const urls = String(mapped.image_url).split(',').map(u => u.trim()).filter(Boolean);
-            if (urls.length > 0) {
-              const mediaMutation = `
-                mutation productCreateMedia($productId: ID!, $media: [CreateMediaInput!]!) {
-                  productCreateMedia(productId: $productId, media: $media) {
-                    media { id }
-                    mediaUserErrors { field message }
-                  }
-                }`;
-              updatePromises.push(shopifyGraphQL(channel, mediaMutation, {
-                productId: shopifyIds.productId,
-                media: urls.map(url => ({ originalSource: url, mediaContentType: 'IMAGE' })),
-              }));
-            }
-          }
-
-          // Execute all updates in parallel
-          await Promise.all(updatePromises);
-
-          await logSyncEntry(jobId, product.sku, 'updated', 'Full sync succeeded');
-          await query('UPDATE sync_jobs SET updated_count = updated_count + 1 WHERE id = $1', [jobId]);
+          const variantInput: Record<string, unknown> = { id: shopifyIds.variantId };
+          if (mapped.price) variantInput.price = String(mapped.price);
+          if (mapped.compare_at_price) variantInput.compareAtPrice = String(mapped.compare_at_price);
+          updatePromises.push(shopifyGraphQL(channel, variantMutation, {
+            productId: shopifyIds.productId,
+            variants: [variantInput],
+          }));
         }
-      } catch (err) {
-        await logSyncEntry(jobId, product.sku, 'failed', String(err));
-        await query('UPDATE sync_jobs SET failed_count = failed_count + 1 WHERE id = $1', [jobId]);
-      }
-    }));
 
-    processed = Math.min(i + INDIVIDUAL_PARALLEL_SIZE, products.length);
-    await query('UPDATE sync_jobs SET processed_count = $1 WHERE id = $2', [processed, jobId]);
-  }
+        if (mapped.inventory_quantity !== undefined && locationId) {
+          const stockQuery = `
+            mutation inventorySetQuantities($input: InventorySetQuantitiesInput!) {
+              inventorySetQuantities(input: $input) {
+                inventoryAdjustmentGroup { reason }
+                userErrors { field message }
+              }
+            }`;
+          updatePromises.push(shopifyGraphQL(channel, stockQuery, {
+            input: {
+              name: "available",
+              reason: "correction",
+              quantities: [{
+                inventoryItemId: shopifyIds.inventoryItemId,
+                locationId,
+                quantity: parseInt(String(mapped.inventory_quantity)),
+              }],
+            },
+          }));
+        }
+
+        if (withImages && mapped.image_url) {
+          const urls = String(mapped.image_url).split(',').map(u => u.trim()).filter(Boolean);
+          if (urls.length > 0) {
+            const mediaMutation = `
+              mutation productCreateMedia($productId: ID!, $media: [CreateMediaInput!]!) {
+                productCreateMedia(productId: $productId, media: $media) {
+                  media { id }
+                  mediaUserErrors { field message }
+                }
+              }`;
+            updatePromises.push(shopifyGraphQL(channel, mediaMutation, {
+              productId: shopifyIds.productId,
+              media: urls.map(url => ({ originalSource: url, mediaContentType: 'IMAGE' })),
+            }));
+          }
+        }
+
+        await Promise.all(updatePromises);
+
+        await logSyncEntry(jobId, product.sku, 'updated', 'Full sync succeeded');
+        await query('UPDATE sync_jobs SET updated_count = updated_count + 1 WHERE id = $1', [jobId]);
+      }
+    } catch (err) {
+      await logSyncEntry(jobId, product.sku, 'failed', String(err));
+      await query('UPDATE sync_jobs SET failed_count = failed_count + 1 WHERE id = $1', [jobId]);
+    }
+  }));
 }
 
 async function createShopifyProduct(channel: Channel, sku: string, mapped: Record<string, unknown>, withImages: boolean, mappings?: AttributeMapping[], rawData?: Record<string, unknown>) {
@@ -576,6 +606,196 @@ function applyMappings(rawData: Record<string, unknown>, mappings: AttributeMapp
     }
   }
   return result;
+}
+
+function groupRowsByHandle(products: ProductRow[], mappings: AttributeMapping[]): GroupedProduct[] {
+  const groups = new Map<string, ProductRow[]>();
+  let previousHandle = '';
+
+  for (const product of products) {
+    const mapped = applyMappings(product.raw_data, mappings);
+    let handle = normalizeHandle(mapped.handle);
+
+    if (!handle && rowHasAnyVariantOption(mapped) && previousHandle) {
+      handle = previousHandle;
+    }
+
+    if (!handle) {
+      handle = normalizeHandle(mapped.title) || normalizeHandle(product.sku) || `sku-${product.sku.toLowerCase()}`;
+    }
+
+    previousHandle = handle;
+
+    const existing = groups.get(handle) || [];
+    existing.push(product);
+    groups.set(handle, existing);
+  }
+
+  return Array.from(groups.entries()).map(([handle, rows]) => ({ handle, rows }));
+}
+
+function normalizeHandle(value: unknown): string {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function rowHasAnyVariantOption(mapped: Record<string, unknown>): boolean {
+  return ['option1_value', 'option2_value', 'option3_value'].some(key => {
+    const value = mapped[key];
+    return value !== undefined && value !== null && String(value).trim() !== '';
+  });
+}
+
+function hasVariantOptions(rows: ProductRow[], mappings: AttributeMapping[]): boolean {
+  return rows.length > 1 && rows.some(row => rowHasAnyVariantOption(applyMappings(row.raw_data, mappings)));
+}
+
+function validateVariantSKUs(rows: ProductRow[]) {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const row of rows) {
+    const sku = String(row.sku || '').trim();
+    if (!sku) continue;
+    if (seen.has(sku)) duplicates.add(sku);
+    seen.add(sku);
+  }
+  if (duplicates.size > 0) {
+    throw new Error(`Duplicate variant SKUs in group: ${Array.from(duplicates).join(', ')}`);
+  }
+}
+
+async function syncVariantGroup(
+  channel: Channel,
+  group: GroupedProduct,
+  mappings: AttributeMapping[],
+  metafieldMappings: AttributeMapping[],
+  withImages: boolean,
+  shopifyMap: Map<string, { productId: string; variantId: string; inventoryItemId: string }>,
+  locationId?: string,
+  priceAdjustmentPercent = 0,
+) {
+  const mappedRows = group.rows.map(row => ({ row, mapped: applyPriceAdjustment(applyMappings(row.raw_data, mappings), priceAdjustmentPercent) }));
+  const first = mappedRows[0];
+  const distinctProductIds = new Set(
+    group.rows
+      .map(row => shopifyMap.get(row.sku)?.productId)
+      .filter((value): value is string => Boolean(value))
+  );
+
+  if (distinctProductIds.size > 1) {
+    throw new Error(`Variant group ${group.handle} matches multiple Shopify products`);
+  }
+
+  const existingProductId = distinctProductIds.values().next().value as string | undefined;
+
+  const productOptions = [1, 2, 3]
+    .map(index => {
+      const name = mappedRows.map(entry => String(entry.mapped[`option${index}_name`] || '').trim()).find(Boolean);
+      const values = Array.from(new Set(mappedRows.map(entry => String(entry.mapped[`option${index}_value`] || '').trim()).filter(Boolean)));
+      if (!name || values.length === 0) return null;
+      return {
+        name,
+        position: index,
+        values: values.map(value => ({ name: value })),
+      };
+    })
+    .filter(Boolean);
+
+  if (productOptions.length === 0) {
+    throw new Error(`Variant group ${group.handle} has no valid option names/values`);
+  }
+
+  const fileMap = new Map<string, { originalSource: string; contentType: string }>();
+  if (withImages) {
+    for (const entry of mappedRows) {
+      const urls = String(entry.mapped.image_url || '').split(',').map(url => url.trim()).filter(Boolean);
+      for (const url of urls) {
+        if (!fileMap.has(url)) fileMap.set(url, { originalSource: url, contentType: 'IMAGE' });
+      }
+    }
+  }
+
+  const metafields = metafieldMappings
+    .filter(m => first.row.raw_data[m.feed_column] !== undefined && first.row.raw_data[m.feed_column] !== null && first.row.raw_data[m.feed_column] !== '')
+    .map(m => {
+      const parts = m.target_field.replace('metafield:', '').split(':');
+      return {
+        namespace: parts[0],
+        key: parts[1],
+        type: parts[2] || 'single_line_text_field',
+        value: String(first.row.raw_data[m.feed_column]),
+      };
+    });
+
+  const input: Record<string, unknown> = {
+    title: first.mapped.title || first.row.sku,
+    handle: group.handle,
+    productOptions,
+    variants: mappedRows.map((entry, index) => {
+      const shopifyIds = shopifyMap.get(entry.row.sku);
+      const optionValues = productOptions.map(option => ({
+        optionName: option!.name,
+        name: String(entry.mapped[`option${option!.position}_value`] || ''),
+      }));
+
+      const variant: Record<string, unknown> = {
+        position: index + 1,
+        sku: entry.row.sku,
+        optionValues,
+      };
+
+      if (shopifyIds?.variantId) variant.id = shopifyIds.variantId;
+      if (entry.mapped.price !== undefined && entry.mapped.price !== null && entry.mapped.price !== '') variant.price = String(entry.mapped.price);
+      if (entry.mapped.compare_at_price !== undefined && entry.mapped.compare_at_price !== null && entry.mapped.compare_at_price !== '') {
+        variant.compareAtPrice = String(entry.mapped.compare_at_price);
+      }
+      if (entry.mapped.barcode) variant.barcode = String(entry.mapped.barcode);
+      if (entry.mapped.taxable !== undefined) variant.taxable = ['true', '1', 'yes'].includes(String(entry.mapped.taxable).toLowerCase());
+      if (entry.mapped.inventory_quantity !== undefined && locationId) {
+        variant.inventoryQuantities = [{
+          locationId,
+          name: 'available',
+          quantity: parseInt(String(entry.mapped.inventory_quantity)),
+        }];
+      }
+
+      const variantImage = withImages ? String(entry.mapped.image_url || '').split(',').map(url => url.trim()).find(Boolean) : null;
+      if (variantImage) {
+        variant.file = { originalSource: variantImage, contentType: 'IMAGE' };
+      }
+
+      return variant;
+    }),
+  };
+
+  if (existingProductId) input.id = existingProductId;
+  if (first.mapped.body_html) input.descriptionHtml = first.mapped.body_html;
+  if (first.mapped.vendor) input.vendor = first.mapped.vendor;
+  if (first.mapped.product_type) input.productType = first.mapped.product_type;
+  if (first.mapped.tags) input.tags = String(first.mapped.tags).split(',').map(tag => tag.trim()).filter(Boolean);
+  if (first.mapped.status) input.status = String(first.mapped.status).toUpperCase();
+  if (metafields.length > 0) input.metafields = metafields;
+  if (fileMap.size > 0) input.files = Array.from(fileMap.values());
+
+  const mutation = `
+    mutation productSetSync($input: ProductSetInput!, $synchronous: Boolean!) {
+      productSet(input: $input, synchronous: $synchronous) {
+        product { id }
+        userErrors { code field message }
+      }
+    }`;
+
+  const result = await shopifyGraphQL(channel, mutation, {
+    input,
+    synchronous: true,
+  }) as { productSet: { product?: { id: string }; userErrors?: Array<{ field?: string[]; message: string }> } };
+
+  if (result.productSet.userErrors && result.productSet.userErrors.length > 0) {
+    throw new Error(result.productSet.userErrors.map(err => err.message).join('; '));
+  }
 }
 
 function applyPriceAdjustment(mapped: Record<string, unknown>, priceAdjustmentPercent = 0): Record<string, unknown> {
