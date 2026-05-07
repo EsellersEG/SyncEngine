@@ -45,6 +45,7 @@ async function init() {
   // Run migrations for missing columns
   try {
     const migrations = [
+      `ALTER TABLE sync_jobs ADD COLUMN IF NOT EXISTS client_id UUID REFERENCES clients(id) ON DELETE CASCADE`,
       `ALTER TABLE sync_jobs ADD COLUMN IF NOT EXISTS processed_count INT DEFAULT 0`,
       `ALTER TABLE sync_jobs ADD COLUMN IF NOT EXISTS skipped_count INT DEFAULT 0`,
       `ALTER TABLE feeds ADD COLUMN IF NOT EXISTS type VARCHAR(20) DEFAULT 'google_sheets'`,

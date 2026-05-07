@@ -103,6 +103,7 @@ CREATE TABLE attribute_mappings (
 -- Sync Jobs
 CREATE TABLE sync_jobs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id UUID REFERENCES clients(id) ON DELETE CASCADE,
   channel_id UUID REFERENCES channels(id) ON DELETE CASCADE,
   feed_id UUID REFERENCES feeds(id),
   triggered_by UUID REFERENCES users(id),
