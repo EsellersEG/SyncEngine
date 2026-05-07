@@ -65,60 +65,110 @@ function parseXmlValue(xml: string): unknown {
 }
 
 function extractValues(xml: string): unknown {
+  xml = xml.trim();
+
   // int/i4
   const intMatch = xml.match(/<(?:int|i4)>(-?\d+)<\/(?:int|i4)>/);
-  if (intMatch) return parseInt(intMatch[1]);
+  if (intMatch && !xml.includes('<array>') && !xml.includes('<struct>')) return parseInt(intMatch[1]);
 
   // double
   const doubleMatch = xml.match(/<double>([\d.-]+)<\/double>/);
-  if (doubleMatch) return parseFloat(doubleMatch[1]);
+  if (doubleMatch && !xml.includes('<array>') && !xml.includes('<struct>')) return parseFloat(doubleMatch[1]);
 
   // boolean
   const boolMatch = xml.match(/<boolean>([01])<\/boolean>/);
-  if (boolMatch) return boolMatch[1] === '1';
+  if (boolMatch && !xml.includes('<array>') && !xml.includes('<struct>')) return boolMatch[1] === '1';
 
-  // string
+  // string (only if no complex types present)
   const strMatch = xml.match(/<string>([\s\S]*?)<\/string>/);
   if (strMatch && !xml.includes('<array>') && !xml.includes('<struct>')) {
     return strMatch[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/&quot;/g, '"');
   }
 
   // nil/None
-  if (xml.includes('<nil/>') || xml.includes('<nil />')) return null;
-
-  // array
-  const arrayMatch = xml.match(/<array>\s*<data>([\s\S]*?)<\/data>\s*<\/array>/);
-  if (arrayMatch) {
-    const items: unknown[] = [];
-    const valueRegex = /<value>([\s\S]*?)<\/value>/g;
-    let match;
-    // Get top-level values only
-    const content = arrayMatch[1];
-    const topLevelValues = splitTopLevelValues(content);
-    for (const val of topLevelValues) {
-      items.push(extractValues(val));
-    }
-    return items;
+  if (xml.includes('<nil/>') || xml.includes('<nil />')) {
+    if (!xml.includes('<array>') && !xml.includes('<struct>')) return null;
   }
 
-  // struct
-  const structMatch = xml.match(/<struct>([\s\S]*?)<\/struct>/);
-  if (structMatch) {
+  // array — use greedy match to capture the OUTERMOST array
+  const arrayStart = xml.indexOf('<array>');
+  const arrayEnd = xml.lastIndexOf('</array>');
+  if (arrayStart !== -1 && arrayEnd !== -1) {
+    const dataStart = xml.indexOf('<data>', arrayStart);
+    const dataEnd = xml.lastIndexOf('</data>', arrayEnd);
+    if (dataStart !== -1 && dataEnd !== -1) {
+      const content = xml.substring(dataStart + 6, dataEnd);
+      const topLevelValues = splitTopLevelValues(content);
+      const items: unknown[] = [];
+      for (const val of topLevelValues) {
+        items.push(extractValues(val));
+      }
+      return items;
+    }
+  }
+
+  // struct — use greedy match to capture the OUTERMOST struct
+  const structStart = xml.indexOf('<struct>');
+  const structEnd = xml.lastIndexOf('</struct>');
+  if (structStart !== -1 && structEnd !== -1) {
+    const structContent = xml.substring(structStart + 8, structEnd);
     const obj: Record<string, unknown> = {};
-    const memberRegex = /<member>\s*<name>([\s\S]*?)<\/name>\s*<value>([\s\S]*?)<\/value>\s*<\/member>/g;
-    let match;
-    while ((match = memberRegex.exec(structMatch[1])) !== null) {
-      obj[match[1]] = extractValues(match[2]);
+    // Parse members using depth-aware splitting
+    const members = splitTopLevelMembers(structContent);
+    for (const member of members) {
+      const nameMatch = member.match(/<name>([\s\S]*?)<\/name>/);
+      if (nameMatch) {
+        // Extract value content between first <value> and last </value> in this member
+        const valStart = member.indexOf('<value>', member.indexOf('</name>'));
+        const valEnd = member.lastIndexOf('</value>');
+        if (valStart !== -1 && valEnd !== -1) {
+          const valContent = member.substring(valStart + 7, valEnd);
+          obj[nameMatch[1]] = extractValues(valContent);
+        }
+      }
     }
     return obj;
   }
 
-  // Fallback: try to find value content
-  const valueMatch = xml.match(/<value>([\s\S]*?)<\/value>/);
+  // Fallback: try to unwrap <value> tag
+  const valueMatch = xml.match(/^<value>([\s\S]*)<\/value>$/);
   if (valueMatch) return extractValues(valueMatch[1]);
 
-  // Plain text (no type tag = string in XML-RPC)
-  return xml.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+  // Plain text fallback
+  return xml.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/&quot;/g, '"') || null;
+}
+
+function splitTopLevelMembers(xml: string): string[] {
+  const results: string[] = [];
+  let depth = 0;
+  let current = '';
+  let inMember = false;
+  let i = 0;
+
+  while (i < xml.length) {
+    if (xml.startsWith('<member>', i)) {
+      if (depth === 0) {
+        inMember = true;
+        current = '';
+      }
+      depth++;
+      current += '<member>';
+      i += 8;
+    } else if (xml.startsWith('</member>', i)) {
+      depth--;
+      current += '</member>';
+      if (depth === 0 && inMember) {
+        results.push(current);
+        inMember = false;
+        current = '';
+      }
+      i += 9;
+    } else {
+      if (inMember) current += xml[i];
+      i++;
+    }
+  }
+  return results;
 }
 
 function splitTopLevelValues(xml: string): string[] {
@@ -232,7 +282,7 @@ export async function fetchOdooProducts(config: OdooConfig): Promise<{ headers: 
 
   const fields = [
     'barcode', 'name', 'list_price', 'qty_available', 'default_code',
-    'categ_id', 'weight', 'description_sale', 'image_1920', 'active',
+    'weight', 'description_sale', 'active',
   ];
 
   // Paginate to avoid 502 timeouts on large catalogs
@@ -266,13 +316,11 @@ export async function fetchOdooProducts(config: OdooConfig): Promise<{ headers: 
     row['default_code'] = p.default_code ? String(p.default_code) : null;
     row['weight'] = typeof p.weight === 'number' ? p.weight : null;
     row['description_sale'] = p.description_sale ? String(p.description_sale) : null;
-    row['category'] = Array.isArray(p.categ_id) ? String(p.categ_id[1] || '') : '';
-    // image_1920 is base64 — store reference, not actual data
     row['odoo_id'] = typeof p.id === 'number' ? p.id : null;
     return row;
   });
 
-  const headers = ['barcode', 'name', 'list_price', 'qty_available', 'default_code', 'weight', 'description_sale', 'category', 'odoo_id'];
+  const headers = ['barcode', 'name', 'list_price', 'qty_available', 'default_code', 'weight', 'description_sale', 'odoo_id'];
   return { headers, rows };
 }
 
