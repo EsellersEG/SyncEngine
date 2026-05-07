@@ -70,7 +70,7 @@ router.patch('/:id', async (req, res) => {
         sync_interval_minutes = $11,
         updated_at = NOW()
        WHERE id = $12 RETURNING *`,
-      [name, type, spreadsheet_id, sheet_name, header_row, is_active, odoo_url, odoo_database, odoo_username, odoo_api_key, sync_interval_minutes ?? null, req.params.id]
+      [name || null, type || null, spreadsheet_id || null, sheet_name || null, header_row, is_active, odoo_url || null, odoo_database || null, odoo_username || null, odoo_api_key || null, sync_interval_minutes ?? null, req.params.id]
     );
     if (!result.rows[0]) return res.status(404).json({ error: 'Feed not found' });
     return res.json(result.rows[0]);
