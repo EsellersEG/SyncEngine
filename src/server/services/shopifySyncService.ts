@@ -389,7 +389,8 @@ async function syncGroupedProduct(
 ) {
   const firstRow = group.rows[0];
 
-  if (hasVariantOptions(group.rows, mappings) && group.rows.length > 1) {
+  if (group.rows.length > 1) {
+    // Multiple rows share the same handle → variant group
     try {
       validateVariantSKUs(group.rows);
       await syncVariantGroup(channel, group, mappings, metafieldMappings, withImages, shopifyMap, locationId, priceAdjustmentPercent, priceRoundingMode);
@@ -597,27 +598,32 @@ async function createShopifyProduct(channel: Channel, sku: string, mapped: Recor
 
   // Publish product to all sales channels
   if (productId) {
-    try {
-      const pubQuery = `{ publications(first: 20) { edges { node { id name } } } }`;
-      const pubData = await shopifyGraphQL(channel, pubQuery) as { publications: { edges: Array<{ node: { id: string; name: string } }> } };
-      const publicationIds = pubData.publications?.edges?.map(e => e.node.id) || [];
+    await publishToSalesChannels(channel, productId);
+  }
+}
 
-      if (publicationIds.length > 0) {
-        const publishMutation = `
-          mutation publishablePublish($id: ID!, $input: [PublicationInput!]!) {
-            publishablePublish(id: $id, input: $input) {
-              publishable { publishedOnCurrentPublication }
-              userErrors { field message }
-            }
-          }`;
-        await shopifyGraphQL(channel, publishMutation, {
-          id: productId,
-          input: publicationIds.map(pid => ({ publicationId: pid })),
-        });
-      }
-    } catch (pubErr) {
-      console.warn(`[Sync] Could not publish product ${productId}:`, pubErr);
+// ── Publish product to all sales channels ──────────────────────────────────
+async function publishToSalesChannels(channel: Channel, productId: string) {
+  try {
+    const pubQuery = `{ publications(first: 20) { edges { node { id name } } } }`;
+    const pubData = await shopifyGraphQL(channel, pubQuery) as { publications: { edges: Array<{ node: { id: string; name: string } }> } };
+    const publicationIds = pubData.publications?.edges?.map(e => e.node.id) || [];
+
+    if (publicationIds.length > 0) {
+      const publishMutation = `
+        mutation publishablePublish($id: ID!, $input: [PublicationInput!]!) {
+          publishablePublish(id: $id, input: $input) {
+            publishable { publishedOnCurrentPublication }
+            userErrors { field message }
+          }
+        }`;
+      await shopifyGraphQL(channel, publishMutation, {
+        id: productId,
+        input: publicationIds.map(pid => ({ publicationId: pid })),
+      });
     }
+  } catch (pubErr) {
+    console.warn(`[Sync] Could not publish product ${productId}:`, pubErr);
   }
 }
 
@@ -634,21 +640,14 @@ function applyMappings(rawData: Record<string, unknown>, mappings: AttributeMapp
 
 function groupRowsByHandle(products: ProductRow[], mappings: AttributeMapping[]): GroupedProduct[] {
   const groups = new Map<string, ProductRow[]>();
-  let previousHandle = '';
 
   for (const product of products) {
     const mapped = applyMappings(product.raw_data, mappings);
-    let handle = normalizeHandle(mapped.handle);
-
-    if (!handle && rowHasAnyVariantOption(mapped) && previousHandle) {
-      handle = previousHandle;
-    }
-
-    if (!handle) {
-      handle = normalizeHandle(mapped.title) || normalizeHandle(product.sku) || `sku-${product.sku.toLowerCase()}`;
-    }
-
-    previousHandle = handle;
+    // Use mapped handle if available, otherwise generate a unique one from title or SKU
+    const handle = normalizeHandle(mapped.handle)
+      || normalizeHandle(mapped.title)
+      || normalizeHandle(product.sku)
+      || `sku-${product.sku.toLowerCase()}`;
 
     const existing = groups.get(handle) || [];
     existing.push(product);
@@ -803,6 +802,12 @@ async function syncVariantGroup(
 
   if (result.productSet.userErrors && result.productSet.userErrors.length > 0) {
     throw new Error(result.productSet.userErrors.map(err => err.message).join('; '));
+  }
+
+  // Publish product to all sales channels
+  const createdProductId = result.productSet.product?.id;
+  if (createdProductId) {
+    await publishToSalesChannels(channel, createdProductId);
   }
 
   if (existingProductId && distinctProductIds.size > 1) {
