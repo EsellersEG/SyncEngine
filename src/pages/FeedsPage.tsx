@@ -22,7 +22,8 @@ export default function FeedsPage() {
   const [showModal, setShowModal] = useState(false);
   const [editingFeed, setEditingFeed] = useState<Feed | null>(null);
   const [importing, setImporting] = useState<string | null>(null);
-  const [importProgress, setImportProgress] = useState<{ total: number; processed: number; status: string } | null>(null);
+  const [importProgress, setImportProgress] = useState<{ total: number; processed: number; status: string; error?: string } | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [form, setForm] = useState({
     client_id: clientId || '', name: '', type: 'google_sheets',
@@ -98,26 +99,31 @@ export default function FeedsPage() {
   async function handleImport(feedId: string) {
     setImporting(feedId);
     setImportProgress(null);
+    setImportError(null);
     try {
       await api.post(`/feeds/${feedId}/import`, {});
       pollRef.current = setInterval(async () => {
         try {
-          const progress = await api.get(`/feeds/${feedId}/import-status`) as { total: number; processed: number; status: string };
+          const progress = await api.get(`/feeds/${feedId}/import-status`) as { total: number; processed: number; status: string; error?: string };
           setImportProgress(progress);
           if (progress.status === 'done' || progress.status === 'error' || progress.status === 'idle') {
             clearInterval(pollRef.current!);
             pollRef.current = null;
             setImporting(null);
-            if (progress.status === 'done') {
+            if (progress.status === 'error') {
+              setImportError(progress.error || 'Import failed — check server logs');
+            } else if (progress.status === 'done') {
               const f = await api.get(`/feeds${clientId ? `?client_id=${clientId}` : ''}`) as Feed[];
               setFeeds(f);
             }
-            setTimeout(() => setImportProgress(null), 3000);
+            setTimeout(() => { setImportProgress(null); setImportError(null); }, 10000);
           }
-        } catch { /* ignore */ }
+        } catch (pollErr) {
+          console.error('Import poll error:', pollErr);
+        }
       }, 1000);
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : 'Import failed');
+      setImportError(err instanceof Error ? err.message : 'Import failed');
       setImporting(null);
     }
   }
@@ -248,6 +254,9 @@ export default function FeedsPage() {
                       )}
                       {importProgress?.status === 'done' && !importing && (
                         <div style={{ marginTop: 6, fontSize: 12, color: '#4ade80' }}>✓ Import complete</div>
+                      )}
+                      {importError && !importing && (
+                        <div style={{ marginTop: 6, fontSize: 12, color: '#f87171', wordBreak: 'break-word' }}>✗ {importError}</div>
                       )}
                     </td>
                   </tr>
