@@ -668,7 +668,7 @@ function rowHasAnyVariantOption(mapped: Record<string, unknown>): boolean {
 }
 
 function hasVariantOptions(rows: ProductRow[], mappings: AttributeMapping[]): boolean {
-  return rows.length > 1 && rows.some(row => rowHasAnyVariantOption(applyMappings(row.raw_data, mappings)));
+  return rows.length > 1 && Boolean(buildVariantOptions(rows, mappings));
 }
 
 function validateVariantSKUs(rows: ProductRow[]) {
@@ -704,24 +704,11 @@ async function syncVariantGroup(
       .filter((value): value is string => Boolean(value))
   );
 
-  if (distinctProductIds.size > 1) {
-    throw new Error(`Variant group ${group.handle} matches multiple Shopify products`);
-  }
+  const existingProductId = distinctProductIds.size <= 1
+    ? distinctProductIds.values().next().value as string | undefined
+    : undefined;
 
-  const existingProductId = distinctProductIds.values().next().value as string | undefined;
-
-  const productOptions = [1, 2, 3]
-    .map(index => {
-      const name = mappedRows.map(entry => String(entry.mapped[`option${index}_name`] || '').trim()).find(Boolean);
-      const values = Array.from(new Set(mappedRows.map(entry => String(entry.mapped[`option${index}_value`] || '').trim()).filter(Boolean)));
-      if (!name || values.length === 0) return null;
-      return {
-        name,
-        position: index,
-        values: values.map(value => ({ name: value })),
-      };
-    })
-    .filter(Boolean);
+  const productOptions = buildVariantOptions(group.rows, mappings);
 
   if (productOptions.length === 0) {
     throw new Error(`Variant group ${group.handle} has no valid option names/values`);
@@ -757,7 +744,7 @@ async function syncVariantGroup(
       const shopifyIds = shopifyMap.get(entry.row.sku);
       const optionValues = productOptions.map(option => ({
         optionName: option!.name,
-        name: String(entry.mapped[`option${option!.position}_value`] || ''),
+        name: option.valuesBySku[entry.row.sku] || '',
       }));
 
       const variant: Record<string, unknown> = {
@@ -814,6 +801,114 @@ async function syncVariantGroup(
 
   if (result.productSet.userErrors && result.productSet.userErrors.length > 0) {
     throw new Error(result.productSet.userErrors.map(err => err.message).join('; '));
+  }
+
+  if (existingProductId && distinctProductIds.size > 1) {
+    await deleteDuplicateGroupedProducts(channel, Array.from(distinctProductIds).filter(id => id !== existingProductId));
+  }
+}
+
+function buildVariantOptions(rows: ProductRow[], mappings: AttributeMapping[]): Array<{ name: string; position: number; values: Array<{ name: string }>; valuesBySku: Record<string, string> }> {
+  const mappedRows = rows.map(row => ({ row, mapped: applyMappings(row.raw_data, mappings) }));
+  const explicitOptions = [1, 2, 3]
+    .map(index => {
+      const name = mappedRows.map(entry => String(entry.mapped[`option${index}_name`] || '').trim()).find(Boolean);
+      const valuesBySku = Object.fromEntries(
+        mappedRows
+          .map(entry => [entry.row.sku, String(entry.mapped[`option${index}_value`] || '').trim()] as const)
+          .filter(([, value]) => Boolean(value))
+      );
+      const values = Array.from(new Set(Object.values(valuesBySku))).filter(Boolean);
+      if (!name || values.length === 0) return null;
+      return {
+        name,
+        position: index,
+        values: values.map(value => ({ name: value })),
+        valuesBySku,
+      };
+    })
+    .filter((option): option is { name: string; position: number; values: Array<{ name: string }>; valuesBySku: Record<string, string> } => Boolean(option));
+
+  if (explicitOptions.length > 0) {
+    return explicitOptions;
+  }
+
+  const inferredOption = inferVariantOptionFromRows(rows);
+  if (inferredOption) {
+    return [{
+      name: inferredOption.name,
+      position: 1,
+      values: Array.from(new Set(Object.values(inferredOption.valuesBySku))).map(value => ({ name: value })),
+      valuesBySku: inferredOption.valuesBySku,
+    }];
+  }
+
+  const skuValuesBySku = Object.fromEntries(rows.map(row => [row.sku, row.sku]));
+  return [{
+    name: 'SKU',
+    position: 1,
+    values: rows.map(row => ({ name: row.sku })),
+    valuesBySku: skuValuesBySku,
+  }];
+}
+
+function inferVariantOptionFromRows(rows: ProductRow[]): { name: string; valuesBySku: Record<string, string> } | null {
+  const preferredKeys = ['size', 'color', 'colour', 'variant', 'style', 'material', 'scent', 'flavor', 'flavour'];
+  const firstRow = rows[0]?.raw_data || {};
+  const headers = Object.keys(firstRow);
+
+  for (const preferredKey of preferredKeys) {
+    const matchingHeader = headers.find(header => normalizeComparisonKey(header) === preferredKey);
+    if (!matchingHeader) continue;
+    const valuesBySku = Object.fromEntries(
+      rows
+        .map(row => [row.sku, String(row.raw_data[matchingHeader] || '').trim()] as const)
+        .filter(([, value]) => Boolean(value))
+    );
+    const distinctValues = Array.from(new Set(Object.values(valuesBySku)));
+    if (distinctValues.length > 1) {
+      return { name: matchingHeader, valuesBySku };
+    }
+  }
+
+  for (const header of headers) {
+    const valuesBySku = Object.fromEntries(
+      rows
+        .map(row => [row.sku, String(row.raw_data[header] || '').trim()] as const)
+        .filter(([, value]) => Boolean(value))
+    );
+    const distinctValues = Array.from(new Set(Object.values(valuesBySku)));
+    if (distinctValues.length === rows.length && distinctValues.length > 1) {
+      return { name: header, valuesBySku };
+    }
+  }
+
+  return null;
+}
+
+function normalizeComparisonKey(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+async function deleteDuplicateGroupedProducts(channel: Channel, productIds: string[]) {
+  if (productIds.length === 0) return;
+
+  const mutation = `
+    mutation productDeleteSync($input: ProductDeleteInput!) {
+      productDelete(input: $input) {
+        deletedProductId
+        userErrors { field message }
+      }
+    }`;
+
+  for (const productId of productIds) {
+    const result = await shopifyGraphQL(channel, mutation, {
+      input: { id: productId },
+    }) as { productDelete: { deletedProductId?: string; userErrors?: Array<{ message: string }> } };
+
+    if (result.productDelete.userErrors && result.productDelete.userErrors.length > 0) {
+      throw new Error(result.productDelete.userErrors.map(err => err.message).join('; '));
+    }
   }
 }
 

@@ -9,6 +9,7 @@ export interface OdooConfig {
   database: string;   // e.g. "mycompany"
   username: string;   // e.g. "admin@company.com"
   apiKey: string;     // API key or password
+  productSearchBy?: 'automatic' | 'sku' | 'ean' | 'name';
 }
 
 interface FeedRow {
@@ -381,19 +382,14 @@ export async function createOdooSaleOrder(
     let productId: number | null = null;
 
     if (item.sku) {
-      // Find by barcode first (user's matching field)
-      const found = await odooExecute(config, uid, 'product.product', 'search_read', [
-        [['barcode', '=', item.sku]]
-      ], { fields: ['id'], limit: 1 }) as Array<{ id: number }>;
-
-      if (found.length > 0) {
-        productId = found[0].id;
-      } else {
-        // Fallback: try default_code
-        const foundByCode = await odooExecute(config, uid, 'product.product', 'search_read', [
-          [['default_code', '=', item.sku]]
+      for (const field of getOdooProductSearchFields(config.productSearchBy)) {
+        const found = await odooExecute(config, uid, 'product.product', 'search_read', [
+          [[field, '=', item.sku]]
         ], { fields: ['id'], limit: 1 }) as Array<{ id: number }>;
-        if (foundByCode.length > 0) productId = foundByCode[0].id;
+        if (found.length > 0) {
+          productId = found[0].id;
+          break;
+        }
       }
     }
 
@@ -428,4 +424,18 @@ export async function createOdooSaleOrder(
   const orderData = await odooExecute(config, uid, 'sale.order', 'read', [[orderId]], { fields: ['name'] }) as Array<{ name: string }>;
 
   return { odooOrderId: orderId, odooOrderName: orderData[0]?.name || `SO-${orderId}` };
+}
+
+function getOdooProductSearchFields(mode: OdooConfig['productSearchBy']): string[] {
+  switch (mode) {
+    case 'sku':
+      return ['default_code', 'barcode', 'name'];
+    case 'ean':
+      return ['barcode', 'default_code', 'name'];
+    case 'name':
+      return ['name', 'default_code', 'barcode'];
+    case 'automatic':
+    default:
+      return ['barcode', 'default_code', 'name'];
+  }
 }

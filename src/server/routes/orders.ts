@@ -37,7 +37,7 @@ router.post('/:id/retry', async (req: AuthRequest, res) => {
 
     // Get Odoo config from feed
     const feedResult = await query(
-      "SELECT odoo_url, odoo_database, odoo_username, odoo_api_key FROM feeds WHERE client_id = $1 AND type = 'odoo' LIMIT 1",
+      "SELECT odoo_url, odoo_database, odoo_username, odoo_api_key, odoo_search_by FROM feeds WHERE client_id = $1 AND type = 'odoo' LIMIT 1",
       [order.client_id]
     );
     const odooFeed = feedResult.rows[0];
@@ -48,6 +48,7 @@ router.post('/:id/retry', async (req: AuthRequest, res) => {
       database: odooFeed.odoo_database,
       username: odooFeed.odoo_username,
       apiKey: odooFeed.odoo_api_key,
+      productSearchBy: odooFeed.odoo_search_by || 'automatic',
     };
 
     const rawData = order.raw_data;

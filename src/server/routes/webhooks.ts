@@ -72,7 +72,7 @@ router.post('/shopify/orders', async (req: Request, res: Response) => {
     if (!odooConfig || !odooConfig.url) {
       // Try to get Odoo config from an Odoo feed for this client
       const feedResult = await query(
-        "SELECT odoo_url, odoo_database, odoo_username, odoo_api_key FROM feeds WHERE client_id = $1 AND type = 'odoo' LIMIT 1",
+        "SELECT odoo_url, odoo_database, odoo_username, odoo_api_key, odoo_search_by FROM feeds WHERE client_id = $1 AND type = 'odoo' LIMIT 1",
         [channel.client_id]
       );
       const odooFeed = feedResult.rows[0];
@@ -86,6 +86,7 @@ router.post('/shopify/orders', async (req: Request, res: Response) => {
         database: odooFeed.odoo_database,
         username: odooFeed.odoo_username,
         apiKey: odooFeed.odoo_api_key,
+        productSearchBy: odooFeed.odoo_search_by || 'automatic',
       };
       await syncOrderToOdoo(channel.id, shopifyOrderId, order, config);
     } else {

@@ -49,6 +49,7 @@ CREATE TABLE feeds (
   odoo_database VARCHAR(255),
   odoo_username VARCHAR(255),
   odoo_api_key TEXT,
+  odoo_search_by VARCHAR(20) NOT NULL DEFAULT 'automatic',
   -- Scheduling
   sync_interval_minutes INT,
   last_sync_at TIMESTAMPTZ,

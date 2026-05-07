@@ -53,6 +53,7 @@ async function init() {
       `ALTER TABLE feeds ADD COLUMN IF NOT EXISTS odoo_database VARCHAR(255)`,
       `ALTER TABLE feeds ADD COLUMN IF NOT EXISTS odoo_username VARCHAR(255)`,
       `ALTER TABLE feeds ADD COLUMN IF NOT EXISTS odoo_api_key TEXT`,
+      `ALTER TABLE feeds ADD COLUMN IF NOT EXISTS odoo_search_by VARCHAR(20) NOT NULL DEFAULT 'automatic'`,
       `ALTER TABLE feeds ADD COLUMN IF NOT EXISTS sync_interval_minutes INT`,
       `ALTER TABLE feeds ALTER COLUMN spreadsheet_id DROP NOT NULL`,
       `CREATE TABLE IF NOT EXISTS orders (

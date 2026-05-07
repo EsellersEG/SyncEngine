@@ -27,6 +27,7 @@ interface FeedRecord {
   odoo_database?: string;
   odoo_username?: string;
   odoo_api_key?: string;
+  odoo_search_by?: 'automatic' | 'sku' | 'ean' | 'name';
 }
 
 function getAuthClient(serviceAccountJson?: string | null) {
@@ -91,7 +92,7 @@ export async function fetchSheetData(feed: FeedRecord): Promise<{ headers: strin
 
 export async function previewFeed(feed: FeedRecord, limit = 10) {
   if (feed.type === 'odoo') {
-    const config: OdooConfig = { url: feed.odoo_url!, database: feed.odoo_database!, username: feed.odoo_username!, apiKey: feed.odoo_api_key! };
+    const config: OdooConfig = { url: feed.odoo_url!, database: feed.odoo_database!, username: feed.odoo_username!, apiKey: feed.odoo_api_key!, productSearchBy: feed.odoo_search_by || 'automatic' };
     const { headers, rows } = await fetchOdooProducts(config);
     return { headers, rows: rows.slice(0, limit), total: rows.length };
   }
@@ -124,11 +125,11 @@ export async function importFeedProducts(feed: FeedRecord) {
 
     if (feed.type === 'odoo') {
       // Odoo feed — fetch via XML-RPC
-      const config: OdooConfig = { url: feed.odoo_url!, database: feed.odoo_database!, username: feed.odoo_username!, apiKey: feed.odoo_api_key! };
+      const config: OdooConfig = { url: feed.odoo_url!, database: feed.odoo_database!, username: feed.odoo_username!, apiKey: feed.odoo_api_key!, productSearchBy: feed.odoo_search_by || 'automatic' };
       const result = await fetchOdooProducts(config);
       headers = result.headers;
       rows = result.rows;
-      skuColumn = 'barcode'; // Odoo products matched by barcode
+      skuColumn = detectOdooSkuColumn(rows, feed.odoo_search_by || 'automatic');
     } else {
       // Google Sheets feed
       const result = await fetchSheetData(feed);
@@ -217,6 +218,29 @@ export async function importFeedProducts(feed: FeedRecord) {
     importProgress.set(feed.id, { total: current?.total || 0, processed: current?.processed || 0, status: 'error', error: String(err) });
     setTimeout(() => importProgress.delete(feed.id), 30000);
     throw err;
+  }
+}
+
+function detectOdooSkuColumn(rows: FeedRow[], mode: FeedRecord['odoo_search_by']): string | null {
+  const populatedCounts = {
+    default_code: rows.filter(row => String(row.default_code || '').trim() !== '').length,
+    barcode: rows.filter(row => String(row.barcode || '').trim() !== '').length,
+    name: rows.filter(row => String(row.name || '').trim() !== '').length,
+  };
+
+  switch (mode) {
+    case 'sku':
+      return populatedCounts.default_code > 0 ? 'default_code' : populatedCounts.barcode > 0 ? 'barcode' : populatedCounts.name > 0 ? 'name' : null;
+    case 'ean':
+      return populatedCounts.barcode > 0 ? 'barcode' : populatedCounts.default_code > 0 ? 'default_code' : populatedCounts.name > 0 ? 'name' : null;
+    case 'name':
+      return populatedCounts.name > 0 ? 'name' : populatedCounts.default_code > 0 ? 'default_code' : populatedCounts.barcode > 0 ? 'barcode' : null;
+    case 'automatic':
+    default:
+      if (populatedCounts.barcode > 0) return 'barcode';
+      if (populatedCounts.default_code > 0) return 'default_code';
+      if (populatedCounts.name > 0) return 'name';
+      return null;
   }
 }
 

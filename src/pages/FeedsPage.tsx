@@ -8,6 +8,7 @@ interface Feed {
   sheet_name: string; is_active: boolean; last_sync_at: string | null;
   last_row_count: number; product_count: string; created_at: string;
   odoo_url?: string; odoo_database?: string; odoo_username?: string; odoo_api_key?: string;
+  odoo_search_by?: 'automatic' | 'sku' | 'ean' | 'name';
   sync_interval_minutes?: number | null;
 }
 interface Client { id: string; name: string; }
@@ -29,6 +30,7 @@ export default function FeedsPage() {
     client_id: clientId || '', name: '', type: 'google_sheets',
     spreadsheet_id: '', sheet_name: 'Sheet1', header_row: 1,
     odoo_url: '', odoo_database: '', odoo_username: '', odoo_api_key: '',
+    odoo_search_by: 'automatic' as 'automatic' | 'sku' | 'ean' | 'name',
     sync_interval_minutes: '',
   });
   const [error, setError] = useState('');
@@ -64,6 +66,7 @@ export default function FeedsPage() {
         payload.odoo_database = form.odoo_database;
         payload.odoo_username = form.odoo_username;
         payload.odoo_api_key = form.odoo_api_key;
+        payload.odoo_search_by = form.odoo_search_by;
       }
 
       if (editingFeed) {
@@ -139,7 +142,7 @@ export default function FeedsPage() {
 
   function openCreateModal() {
     setEditingFeed(null);
-    setForm({ client_id: clientId || '', name: '', type: 'google_sheets', spreadsheet_id: '', sheet_name: 'Sheet1', header_row: 1, odoo_url: '', odoo_database: '', odoo_username: '', odoo_api_key: '', sync_interval_minutes: '' });
+    setForm({ client_id: clientId || '', name: '', type: 'google_sheets', spreadsheet_id: '', sheet_name: 'Sheet1', header_row: 1, odoo_url: '', odoo_database: '', odoo_username: '', odoo_api_key: '', odoo_search_by: 'automatic', sync_interval_minutes: '' });
     setError('');
     setTestResult(null);
     setShowModal(true);
@@ -233,6 +236,7 @@ export default function FeedsPage() {
                             spreadsheet_id: feed.spreadsheet_id || '', sheet_name: feed.sheet_name || 'Sheet1', header_row: 1,
                             odoo_url: feed.odoo_url || '', odoo_database: feed.odoo_database || '',
                             odoo_username: feed.odoo_username || '', odoo_api_key: '',
+                            odoo_search_by: feed.odoo_search_by || 'automatic',
                             sync_interval_minutes: feed.sync_interval_minutes ? String(feed.sync_interval_minutes) : '',
                           });
                           setError('');
@@ -359,6 +363,15 @@ export default function FeedsPage() {
                         onChange={e => setForm(f => ({ ...f, odoo_api_key: e.target.value }))} required={!editingFeed} />
                     </div>
                   </div>
+                  <div className="form-group">
+                    <label className="label">Search For Products By</label>
+                    <select className="input" value={form.odoo_search_by} onChange={e => setForm(f => ({ ...f, odoo_search_by: e.target.value as 'automatic' | 'sku' | 'ean' | 'name' }))}>
+                      <option value="automatic">Automatically</option>
+                      <option value="sku">SKU</option>
+                      <option value="ean">EAN</option>
+                      <option value="name">Name</option>
+                    </select>
+                  </div>
                   <button type="button" className="btn btn-secondary btn-sm" onClick={handleTestOdoo} disabled={testing || !form.odoo_url || !form.odoo_database || !form.odoo_username || !form.odoo_api_key}>
                     {testing ? <><Loader2 size={12} className="spinner" /> Testing...</> : <><CheckCircle size={12} /> Test Connection</>}
                   </button>
@@ -369,7 +382,7 @@ export default function FeedsPage() {
                   )}
                   <div style={{ background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.15)', borderRadius: 8, padding: '10px 12px', display: 'flex', gap: 8, alignItems: 'flex-start' }}>
                     <AlertCircle size={14} color="#fbbf24" style={{ flexShrink: 0, marginTop: 1 }} />
-                    <span style={{ fontSize: 12, color: '#94a3b8' }}>Odoo Online requires a Custom plan for XML-RPC access. Products are matched by barcode.</span>
+                    <span style={{ fontSize: 12, color: '#94a3b8' }}>Odoo Online requires a Custom plan for XML-RPC access. Product lookup follows the option selected above.</span>
                   </div>
                 </>
               )}
