@@ -698,15 +698,11 @@ async function syncVariantGroup(
 ) {
   const mappedRows = group.rows.map(row => ({ row, mapped: applyPriceAdjustment(applyMappings(row.raw_data, mappings), priceAdjustmentPercent, priceRoundingMode) }));
   const first = mappedRows[0];
-  const distinctProductIds = new Set(
-    group.rows
-      .map(row => shopifyMap.get(row.sku)?.productId)
-      .filter((value): value is string => Boolean(value))
-  );
-
-  const existingProductId = distinctProductIds.size <= 1
-    ? distinctProductIds.values().next().value as string | undefined
-    : undefined;
+  const productIds = group.rows
+    .map(row => shopifyMap.get(row.sku)?.productId)
+    .filter((value): value is string => Boolean(value));
+  const distinctProductIds = new Set(productIds);
+  const existingProductId = chooseCanonicalProductId(productIds);
 
   const productOptions = buildVariantOptions(group.rows, mappings);
 
@@ -910,6 +906,24 @@ async function deleteDuplicateGroupedProducts(channel: Channel, productIds: stri
       throw new Error(result.productDelete.userErrors.map(err => err.message).join('; '));
     }
   }
+}
+
+function chooseCanonicalProductId(productIds: string[]): string | undefined {
+  if (productIds.length === 0) return undefined;
+
+  const counts = new Map<string, number>();
+  for (const productId of productIds) {
+    counts.set(productId, (counts.get(productId) || 0) + 1);
+  }
+
+  const sorted = Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
+  const [candidateId, candidateCount] = sorted[0];
+
+  if (counts.size === 1 || candidateCount > 1) {
+    return candidateId;
+  }
+
+  return undefined;
 }
 
 function applyPriceAdjustment(
