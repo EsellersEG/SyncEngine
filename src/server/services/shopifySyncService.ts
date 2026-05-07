@@ -25,6 +25,7 @@ interface SyncJobConfig {
   fields?: string[];
   filterRules?: Array<{ field: string; operator: string; value: string; logic?: string }>;
   skus?: string[]; // If provided, only sync these SKUs
+  priceAdjustmentPercent?: number;
 }
 
 interface ProductRow {
@@ -182,7 +183,7 @@ async function getShopifyProductMap(channel: Channel): Promise<Map<string, { pro
 }
 
 // ── Turbo Mode: parallel price/stock updates ──────────────────────────────
-async function turboSync(channel: Channel, products: ProductRow[], mappings: AttributeMapping[], jobId: string) {
+async function turboSync(channel: Channel, products: ProductRow[], mappings: AttributeMapping[], jobId: string, priceAdjustmentPercent = 0) {
   const shopifyMap = await getShopifyProductMap(channel);
 
   // Pre-resolve location once
@@ -203,7 +204,7 @@ async function turboSync(channel: Channel, products: ProductRow[], mappings: Att
     }
 
     const batch = products.slice(i, i + BATCH_SIZE);
-    await Promise.all(batch.map(p => syncProductTurbo(channel, p, mappings, metafieldMappings, shopifyMap, jobId, locationId)));
+    await Promise.all(batch.map(p => syncProductTurbo(channel, p, mappings, metafieldMappings, shopifyMap, jobId, locationId, 0, priceAdjustmentPercent)));
     await query('UPDATE sync_jobs SET processed_count = $1 WHERE id = $2', [Math.min(i + BATCH_SIZE, products.length), jobId]);
   }
 }
@@ -216,7 +217,8 @@ async function syncProductTurbo(
   shopifyMap: Map<string, { productId: string; variantId: string; inventoryItemId: string }>,
   jobId: string,
   locationId?: string,
-  retries = 0
+  retries = 0,
+  priceAdjustmentPercent = 0
 ): Promise<void> {
   const shopifyIds = shopifyMap.get(product.sku);
 
@@ -227,7 +229,7 @@ async function syncProductTurbo(
   }
 
   try {
-    const mapped = applyMappings(product.raw_data, mappings);
+    const mapped = applyPriceAdjustment(applyMappings(product.raw_data, mappings), priceAdjustmentPercent);
 
     // Combined: Price + Metafields in minimal API calls
     // 1. Product update with metafields (single call)
@@ -304,7 +306,7 @@ async function syncProductTurbo(
     const errMsg = String(err);
     if (errMsg.includes('Throttled') && retries < MAX_RETRIES) {
       await sleep(RETRY_DELAY_MS * (retries + 1));
-      return syncProductTurbo(channel, product, mappings, metafieldMappings, shopifyMap, jobId, locationId, retries + 1);
+      return syncProductTurbo(channel, product, mappings, metafieldMappings, shopifyMap, jobId, locationId, retries + 1, priceAdjustmentPercent);
     }
     await logSyncEntry(jobId, product.sku, 'failed', errMsg);
     await query('UPDATE sync_jobs SET failed_count = failed_count + 1 WHERE id = $1', [jobId]);
@@ -312,7 +314,7 @@ async function syncProductTurbo(
 }
 
 // ── Individual Sync: create new + update all fields (PARALLEL) ────────────
-async function individualSync(channel: Channel, products: ProductRow[], mappings: AttributeMapping[], jobId: string, withImages: boolean) {
+async function individualSync(channel: Channel, products: ProductRow[], mappings: AttributeMapping[], jobId: string, withImages: boolean, priceAdjustmentPercent = 0) {
   const shopifyMap = await getShopifyProductMap(channel);
 
   // Pre-resolve location once
@@ -338,7 +340,7 @@ async function individualSync(channel: Channel, products: ProductRow[], mappings
     const batch = products.slice(i, i + INDIVIDUAL_PARALLEL_SIZE);
     await Promise.all(batch.map(async (product) => {
       const shopifyIds = shopifyMap.get(product.sku);
-      const mapped = applyMappings(product.raw_data, mappings);
+      const mapped = applyPriceAdjustment(applyMappings(product.raw_data, mappings), priceAdjustmentPercent);
 
       try {
         if (!shopifyIds) {
@@ -576,6 +578,21 @@ function applyMappings(rawData: Record<string, unknown>, mappings: AttributeMapp
   return result;
 }
 
+function applyPriceAdjustment(mapped: Record<string, unknown>, priceAdjustmentPercent = 0): Record<string, unknown> {
+  if (!priceAdjustmentPercent) return mapped;
+
+  const adjusted = { ...mapped };
+  for (const field of ['price', 'compare_at_price']) {
+    const current = adjusted[field];
+    if (current === undefined || current === null || current === '') continue;
+    const numeric = Number(current);
+    if (Number.isFinite(numeric)) {
+      adjusted[field] = (numeric * (1 + (priceAdjustmentPercent / 100))).toFixed(2);
+    }
+  }
+  return adjusted;
+}
+
 // ── Logging ────────────────────────────────────────────────────────────────
 async function logSyncEntry(jobId: string, sku: string, action: string, message: string) {
   await query(
@@ -622,12 +639,13 @@ function evaluateFilterRules(rawData: Record<string, unknown>, rules: Array<{ fi
 
 // ── Main Entry Point ───────────────────────────────────────────────────────
 export async function runSyncJob(config: SyncJobConfig) {
-  const { jobId, channel, feedId, preset, filterRules, skus } = config;
+  const { jobId, channel, feedId, preset, filterRules, skus, priceAdjustmentPercent = 0 } = config;
 
   try {
     await query("UPDATE sync_jobs SET status = 'running', started_at = NOW() WHERE id = $1", [jobId]);
 
     let products: ProductRow[];
+    let sourceCount = 0;
     if (skus && skus.length > 0) {
       // Only fetch specific SKUs (auto-sync for changed products)
       const productsResult = await query(
@@ -635,17 +653,19 @@ export async function runSyncJob(config: SyncJobConfig) {
         [feedId, 'active', skus]
       );
       products = productsResult.rows;
+      sourceCount = products.length;
     } else {
       const productsResult = await query(
         'SELECT sku, raw_data FROM products WHERE feed_id = $1 AND status = $2',
         [feedId, 'active']
       );
       products = productsResult.rows;
+      sourceCount = products.length;
     }
 
     if (filterRules && filterRules.length > 0) {
       products = products.filter(p => evaluateFilterRules(p.raw_data, filterRules));
-      console.log(`[SyncFlow] Filter rules applied: ${productsResult.rows.length} → ${products.length} products`);
+      console.log(`[SyncFlow] Filter rules applied: ${sourceCount} → ${products.length} products`);
     }
 
     await query('UPDATE sync_jobs SET total_products = $1 WHERE id = $2', [products.length, jobId]);
@@ -660,13 +680,13 @@ export async function runSyncJob(config: SyncJobConfig) {
 
     if (preset === 'price_stock_meta' || (config.fields && config.fields.every(f => ['price', 'stock', 'metafields'].includes(f)))) {
       console.log('[SyncFlow] Pathway: TURBO');
-      await turboSync(channel, products, mappings, jobId);
+      await turboSync(channel, products, mappings, jobId, priceAdjustmentPercent);
     } else if (products.length < 50) {
       console.log('[SyncFlow] Pathway: INDIVIDUAL');
-      await individualSync(channel, products, mappings, jobId, preset !== 'sync_all_no_images');
+      await individualSync(channel, products, mappings, jobId, preset !== 'sync_all_no_images', priceAdjustmentPercent);
     } else {
       console.log('[SyncFlow] Pathway: INDIVIDUAL (large batch, parallel)');
-      await individualSync(channel, products, mappings, jobId, preset === 'sync_all');
+      await individualSync(channel, products, mappings, jobId, preset === 'sync_all', priceAdjustmentPercent);
     }
 
     // Don't mark complete if cancelled

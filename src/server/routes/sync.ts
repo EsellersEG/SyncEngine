@@ -25,6 +25,15 @@ router.post('/start', async (req: AuthRequest, res) => {
       return res.status(400).json({ error: 'Only Shopify channels supported in Phase 1' });
     }
 
+    const feedResult = await query(
+      'SELECT id, type FROM feeds WHERE id = $1',
+      [feed_id]
+    );
+    const feed = feedResult.rows[0];
+    if (!feed) return res.status(404).json({ error: 'Feed not found' });
+
+    const effectivePreset = feed.type === 'odoo' ? 'price_stock_meta' : preset;
+
     // Check for already running job
     const running = await query(
       "SELECT id FROM sync_jobs WHERE channel_id = $1 AND status = 'running'",
@@ -39,14 +48,14 @@ router.post('/start', async (req: AuthRequest, res) => {
       `INSERT INTO sync_jobs (channel_id, feed_id, triggered_by, preset, fields, status)
        VALUES ($1, $2, $3, $4, $5, 'pending')
        RETURNING id`,
-      [channel_id, feed_id, req.user!.id, preset, fields || null]
+      [channel_id, feed_id, req.user!.id, effectivePreset, fields || null]
     );
     const jobId = jobResult.rows[0].id;
 
     res.json({ jobId, status: 'pending', message: 'Sync job started' });
 
     // Run async (don't await)
-    runSyncJob({ jobId, channel, feedId: feed_id, preset, fields, filterRules: filter_rules }).catch(err => {
+    runSyncJob({ jobId, channel, feedId: feed_id, preset: effectivePreset, fields, filterRules: filter_rules }).catch(err => {
       console.error(`[SyncRoute] Job ${jobId} crashed:`, err);
     });
 

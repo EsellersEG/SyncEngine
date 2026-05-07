@@ -4,7 +4,7 @@ import { useAuth } from '../hooks/useAuth';
 import { Zap, Play, XCircle, RefreshCw, CheckCircle, AlertTriangle, Clock, ChevronDown, ChevronUp, Plus, Trash2, Filter, ArrowLeft, Eye, Download } from 'lucide-react';
 
 interface Channel { id: string; name: string; type: string; client_id: string; }
-interface Feed { id: string; name: string; client_id: string; }
+interface Feed { id: string; name: string; client_id: string; type?: string; }
 interface SyncJob {
   id: string; channel_id: string; channel_name: string; feed_id: string;
   preset: string; status: string; total_products: number;
@@ -106,6 +106,15 @@ export default function SyncPage() {
       api.get(`/sync/feed-headers/${config.feed_id}`).then((r: { headers: string[] }) => setFeedHeaders(r.headers)).catch(() => {});
     }
   }, [config.feed_id]);
+
+  const selectedFeed = feeds.find(f => f.id === config.feed_id);
+
+  useEffect(() => {
+    if (selectedFeed?.type === 'odoo' && config.preset !== 'price_stock_meta') {
+      setConfig(prev => ({ ...prev, preset: 'price_stock_meta' }));
+      setCustomFields([]);
+    }
+  }, [selectedFeed, config.preset]);
 
   // Check mapping count when feed+channel are selected
   useEffect(() => {
@@ -542,16 +551,23 @@ export default function SyncPage() {
             </div>
             <div className="form-group">
               <label className="label">Sync Preset</label>
+              {selectedFeed?.type === 'odoo' && (
+                <div style={{ marginBottom: 10, fontSize: 12, color: '#fbbf24' }}>
+                  Odoo feeds are update-only. They only update existing Shopify SKUs for price, stock, and mapped metafields.
+                </div>
+              )}
               {PRESETS.map(p => (
                 <label key={p.value} style={{
                   display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', borderRadius: 10,
                   border: `1px solid ${config.preset === p.value ? 'rgba(79,110,247,0.4)' : 'rgba(79,110,247,0.1)'}`,
                   background: config.preset === p.value ? 'rgba(79,110,247,0.08)' : 'transparent',
                   cursor: 'pointer', marginBottom: 6, transition: 'all 0.2s',
+                  opacity: selectedFeed?.type === 'odoo' && p.value !== 'price_stock_meta' ? 0.45 : 1,
                 }}>
                   <input type="radio" name="preset" value={p.value}
                     checked={config.preset === p.value}
                     onChange={e => setConfig(c => ({ ...c, preset: e.target.value }))}
+                    disabled={selectedFeed?.type === 'odoo' && p.value !== 'price_stock_meta'}
                     style={{ marginTop: 3, accentColor: '#4f6ef7' }}
                   />
                   <div>

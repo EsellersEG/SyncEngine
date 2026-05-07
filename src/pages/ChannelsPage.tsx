@@ -5,7 +5,7 @@ import { Plus, GitBranch, Trash2, CheckCircle, XCircle, Loader, Pencil } from 'l
 interface Channel {
   id: string; client_id: string; name: string; type: string; status: string;
   shopify_store_url: string; shopify_api_version: string; total_syncs: string;
-  last_synced_at: string | null; created_at: string; settings?: { stock_location_id?: string };
+  last_synced_at: string | null; created_at: string; settings?: { stock_location_id?: string; webhook_secret?: string };
 }
 interface Client { id: string; name: string; }
 interface Location { id: string; name: string; active: boolean; address: string; }
@@ -32,11 +32,11 @@ export default function ChannelsPage() {
   const [testing, setTesting] = useState<string | null>(null);
   const [form, setForm] = useState({
     client_id: '', name: '', type: 'shopify',
-    shopify_store_url: '', shopify_access_token: '', shopify_api_version: '2024-10',
+    shopify_store_url: '', shopify_access_token: '', shopify_api_version: '2024-10', webhook_secret: '',
   });
   const [error, setError] = useState('');
   const [editChannel, setEditChannel] = useState<Channel | null>(null);
-  const [editForm, setEditForm] = useState({ name: '', shopify_access_token: '', shopify_api_version: '2024-10', stock_location_id: '' });
+  const [editForm, setEditForm] = useState({ name: '', shopify_access_token: '', shopify_api_version: '2024-10', stock_location_id: '', webhook_secret: '' });
   const [locations, setLocations] = useState<Location[]>([]);
   const [loadingLocations, setLoadingLocations] = useState(false);
 
@@ -50,7 +50,16 @@ export default function ChannelsPage() {
     e.preventDefault();
     setError('');
     try {
-      const newCh = await api.post('/channels', form) as Channel;
+      const payload = {
+        client_id: form.client_id,
+        name: form.name,
+        type: form.type,
+        shopify_store_url: form.shopify_store_url,
+        shopify_access_token: form.shopify_access_token,
+        shopify_api_version: form.shopify_api_version,
+        settings: { webhook_secret: form.webhook_secret || null },
+      };
+      const newCh = await api.post('/channels', payload) as Channel;
       setChannels(prev => [newCh, ...prev]);
       setShowModal(false);
     } catch (err: unknown) {
@@ -84,6 +93,7 @@ export default function ChannelsPage() {
       shopify_access_token: '',
       shopify_api_version: ch.shopify_api_version || '2024-10',
       stock_location_id: ch.settings?.stock_location_id || '',
+      webhook_secret: ch.settings?.webhook_secret || '',
     });
     setError('');
     setLocations([]);
@@ -103,7 +113,7 @@ export default function ChannelsPage() {
     try {
       const body: Record<string, unknown> = { name: editForm.name, shopify_api_version: editForm.shopify_api_version };
       if (editForm.shopify_access_token) body.shopify_access_token = editForm.shopify_access_token;
-      body.settings = { stock_location_id: editForm.stock_location_id || null };
+      body.settings = { stock_location_id: editForm.stock_location_id || null, webhook_secret: editForm.webhook_secret || null };
       const updated = await api.patch(`/channels/${editChannel.id}`, body) as Channel;
       setChannels(prev => prev.map(ch => ch.id === updated.id ? { ...ch, ...updated } : ch));
       setEditChannel(null);
@@ -122,7 +132,7 @@ export default function ChannelsPage() {
         <button className="btn btn-primary" onClick={() => {
           setForm({
             client_id: '', name: '', type: 'shopify',
-            shopify_store_url: '', shopify_access_token: '', shopify_api_version: '2024-10',
+            shopify_store_url: '', shopify_access_token: '', shopify_api_version: '2024-10', webhook_secret: '',
           });
           setError('');
           setShowModal(true);
@@ -257,6 +267,22 @@ export default function ChannelsPage() {
                   </select>
                 )}
               </div>
+              {editChannel.type === 'shopify' && (
+                <div style={{ border: '1px solid rgba(79,110,247,0.15)', borderRadius: 10, padding: 14, background: 'rgba(13,18,36,0.4)' }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#e2e8f0', marginBottom: 10 }}>Shopify Webhook Registration</div>
+                  <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 10 }}>Register this in Shopify Admin → Settings → Notifications → Webhooks → Orders create.</div>
+                  <div className="form-group" style={{ marginBottom: 10 }}>
+                    <label className="label">Webhook URL</label>
+                    <input className="input" readOnly value={`${window.location.origin}/webhooks/shopify/orders`} />
+                  </div>
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="label">Webhook Secret</label>
+                    <input className="input" value={editForm.webhook_secret}
+                      onChange={e => setEditForm(f => ({ ...f, webhook_secret: e.target.value }))}
+                      placeholder="Optional but recommended for HMAC verification" />
+                  </div>
+                </div>
+              )}
               {error && <div style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: '#f87171' }}>{error}</div>}
               <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
                 <button type="button" className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setEditChannel(null)}>Cancel</button>
@@ -304,6 +330,20 @@ export default function ChannelsPage() {
                     <label className="label">Access Token</label>
                     <input className="input" type="password" placeholder="shpat_..." value={form.shopify_access_token}
                       onChange={e => setForm(f => ({ ...f, shopify_access_token: e.target.value }))} />
+                  </div>
+                  <div style={{ border: '1px solid rgba(79,110,247,0.15)', borderRadius: 10, padding: 14, background: 'rgba(13,18,36,0.4)' }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#e2e8f0', marginBottom: 10 }}>Shopify Webhook Registration</div>
+                    <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 10 }}>After saving, register Orders create in Shopify Admin using this URL.</div>
+                    <div className="form-group" style={{ marginBottom: 10 }}>
+                      <label className="label">Webhook URL</label>
+                      <input className="input" readOnly value={`${window.location.origin}/webhooks/shopify/orders`} />
+                    </div>
+                    <div className="form-group" style={{ marginBottom: 0 }}>
+                      <label className="label">Webhook Secret</label>
+                      <input className="input" value={form.webhook_secret}
+                        onChange={e => setForm(f => ({ ...f, webhook_secret: e.target.value }))}
+                        placeholder="Optional but recommended for HMAC verification" />
+                    </div>
                   </div>
                 </>
               )}

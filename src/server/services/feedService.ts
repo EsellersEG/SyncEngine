@@ -226,7 +226,8 @@ export async function importFeedProducts(feed: FeedRecord) {
 async function triggerAutoSync(feed: FeedRecord, changedSkus: string[]) {
   // Find 'after_import' automations for this feed
   const automationsResult = await query(
-    `SELECT a.*, ch.id as ch_id, ch.name as ch_name
+    `SELECT a.*, ch.id as ch_id, ch.name as ch_name,
+            ch.shopify_store_url, ch.shopify_access_token, ch.shopify_api_version, ch.settings
      FROM automations a
      JOIN channels ch ON a.channel_id = ch.id
      WHERE a.feed_id = $1
@@ -244,6 +245,7 @@ async function triggerAutoSync(feed: FeedRecord, changedSkus: string[]) {
   for (const automation of automationsResult.rows) {
     const channelId = automation.ch_id;
     const channelName = automation.ch_name;
+    const preset = feed.type === 'odoo' ? 'price_stock_meta' : 'sync_all';
 
     // Check if there's already a running job for this channel
     const running = await query(
@@ -258,9 +260,9 @@ async function triggerAutoSync(feed: FeedRecord, changedSkus: string[]) {
     // Create a sync job
     const jobResult = await query(
       `INSERT INTO sync_jobs (channel_id, feed_id, preset, total_products, status, client_id)
-       VALUES ($1, $2, 'sync_all', $3, 'pending', $4)
+       VALUES ($1, $2, $3, $4, 'pending', $5)
        RETURNING id`,
-      [channelId, feed.id, changedSkus.length, feed.client_id]
+      [channelId, feed.id, preset, changedSkus.length, feed.client_id]
     );
     const jobId = jobResult.rows[0].id;
 
@@ -272,10 +274,17 @@ async function triggerAutoSync(feed: FeedRecord, changedSkus: string[]) {
     // Run async
     runSyncJob({
       jobId,
-      channel: { id: channelId },
+      channel: {
+        id: channelId,
+        shopify_store_url: automation.shopify_store_url,
+        shopify_access_token: automation.shopify_access_token,
+        shopify_api_version: automation.shopify_api_version,
+        settings: automation.settings,
+      },
       feedId: feed.id,
-      preset: 'sync_all',
+      preset,
       skus: changedSkus,
+      priceAdjustmentPercent: Number(automation.price_adjustment_percent || 0),
     }).catch(err => {
       console.error(`[FeedService] Auto-sync job ${jobId} failed:`, err);
     });

@@ -11,14 +11,16 @@ interface Automation {
   action_type: 'import_feed' | 'sync_to_shopify';
   feed_id?: string;
   feed_name?: string;
+  feed_type?: string;
   channel_id?: string;
   channel_name?: string;
   interval_minutes?: number;
+  price_adjustment_percent?: number;
   is_active: boolean;
   last_run_at?: string;
   created_at: string;
 }
-interface Feed { id: string; name: string; client_id: string; }
+interface Feed { id: string; name: string; client_id: string; type?: string; }
 interface Channel { id: string; name: string; client_id: string; }
 interface Client { id: string; name: string; }
 
@@ -32,7 +34,7 @@ export default function AutomationsPage() {
   const [form, setForm] = useState({
     client_id: '', name: '', trigger_type: 'schedule' as string,
     action_type: 'import_feed' as string, feed_id: '', channel_id: '',
-    interval_minutes: '60',
+    interval_minutes: '60', price_adjustment_percent: '0',
   });
   const [error, setError] = useState('');
 
@@ -62,6 +64,7 @@ export default function AutomationsPage() {
         feed_id: form.feed_id || null,
         channel_id: form.channel_id || null,
         interval_minutes: form.trigger_type === 'schedule' ? parseInt(form.interval_minutes) : null,
+        price_adjustment_percent: form.action_type === 'sync_to_shopify' ? parseFloat(form.price_adjustment_percent || '0') : 0,
       };
       const created = await api.post('/automations', payload) as Automation;
       setAutomations(prev => [created, ...prev]);
@@ -99,7 +102,8 @@ export default function AutomationsPage() {
 
   function getActionLabel(a: Automation) {
     if (a.action_type === 'import_feed') return `Import → ${a.feed_name || 'feed'}`;
-    return `Sync → ${a.channel_name || 'Shopify'}`;
+    const vat = a.price_adjustment_percent ? ` (+${a.price_adjustment_percent}% VAT)` : '';
+    return `Sync ${a.feed_name || 'feed'} → ${a.channel_name || 'Shopify'}${vat}`;
   }
 
   return (
@@ -111,7 +115,7 @@ export default function AutomationsPage() {
           <p className="page-subtitle">Configure automatic imports and sync schedules</p>
         </div>
         <button className="btn btn-primary" onClick={() => {
-          setForm({ client_id: '', name: '', trigger_type: 'schedule', action_type: 'import_feed', feed_id: '', channel_id: '', interval_minutes: '60' });
+          setForm({ client_id: '', name: '', trigger_type: 'schedule', action_type: 'import_feed', feed_id: '', channel_id: '', interval_minutes: '60', price_adjustment_percent: '0' });
           setError('');
           setShowModal(true);
         }}>
@@ -129,7 +133,7 @@ export default function AutomationsPage() {
             <Activity size={40} color="#334155" style={{ margin: '0 auto 16px' }} />
             <p style={{ color: '#475569', fontSize: 16, fontWeight: 600, marginBottom: 8 }}>No automations configured</p>
             <p style={{ color: '#334155', fontSize: 14, marginBottom: 24 }}>Create rules to automatically import products and sync to Shopify</p>
-            <button className="btn btn-primary" onClick={() => { setForm({ client_id: '', name: '', trigger_type: 'schedule', action_type: 'import_feed', feed_id: '', channel_id: '', interval_minutes: '60' }); setError(''); setShowModal(true); }}>
+            <button className="btn btn-primary" onClick={() => { setForm({ client_id: '', name: '', trigger_type: 'schedule', action_type: 'import_feed', feed_id: '', channel_id: '', interval_minutes: '60', price_adjustment_percent: '0' }); setError(''); setShowModal(true); }}>
               <Plus size={15} /> Add First Automation
             </button>
           </div>
@@ -227,10 +231,10 @@ export default function AutomationsPage() {
               <label className="label">Action</label>
               <select className="input" value={form.action_type} onChange={e => setForm(f => ({ ...f, action_type: e.target.value }))}>
                 <option value="import_feed">Import products from Feed</option>
-                <option value="sync_to_shopify">Sync to Shopify channel</option>
+                <option value="sync_to_shopify">Sync feed to Shopify channel</option>
               </select>
             </div>
-            {form.action_type === 'import_feed' && (
+            {(form.action_type === 'import_feed' || form.action_type === 'sync_to_shopify') && (
               <div className="form-group">
                 <label className="label">Feed</label>
                 <select className="input" value={form.feed_id} onChange={e => setForm(f => ({ ...f, feed_id: e.target.value }))} required>
@@ -240,22 +244,22 @@ export default function AutomationsPage() {
               </div>
             )}
             {form.action_type === 'sync_to_shopify' && (
-              <div className="form-group">
-                <label className="label">Channel</label>
-                <select className="input" value={form.channel_id} onChange={e => setForm(f => ({ ...f, channel_id: e.target.value }))} required>
-                  <option value="">Select channel...</option>
-                  {filteredChannels.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
-              </div>
-            )}
-            {form.action_type === 'sync_to_shopify' && form.trigger_type === 'after_import' && (
-              <div className="form-group">
-                <label className="label">After import of Feed</label>
-                <select className="input" value={form.feed_id} onChange={e => setForm(f => ({ ...f, feed_id: e.target.value }))} required>
-                  <option value="">Select feed...</option>
-                  {filteredFeeds.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
-                </select>
-              </div>
+              <>
+                <div className="form-group">
+                  <label className="label">Channel</label>
+                  <select className="input" value={form.channel_id} onChange={e => setForm(f => ({ ...f, channel_id: e.target.value }))} required>
+                    <option value="">Select channel...</option>
+                    {filteredChannels.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="label">Price Adjustment %</label>
+                  <input className="input" type="number" min="0" step="0.01" value={form.price_adjustment_percent}
+                    onChange={e => setForm(f => ({ ...f, price_adjustment_percent: e.target.value }))}
+                    placeholder="14" />
+                  <div style={{ fontSize: 12, color: '#64748b', marginTop: 6 }}>Example: set to 14 to add 14% VAT before sending Shopify prices.</div>
+                </div>
+              </>
             )}
             <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
               <button className="btn btn-primary" type="submit">Create</button>

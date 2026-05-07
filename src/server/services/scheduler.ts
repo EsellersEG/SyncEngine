@@ -22,7 +22,7 @@ export function startScheduler() {
           f.name as feed_name, f.type as feed_type,
           f.spreadsheet_id, f.sheet_name, f.header_row, f.service_account_json,
           f.odoo_url, f.odoo_database, f.odoo_username, f.odoo_api_key,
-          ch.name as channel_name,
+          ch.name as channel_name, ch.shopify_store_url, ch.shopify_access_token, ch.shopify_api_version, ch.settings,
           c.name as client_name
          FROM automations a
          LEFT JOIN feeds f ON a.feed_id = f.id
@@ -57,18 +57,31 @@ export function startScheduler() {
               odoo_api_key: automation.odoo_api_key,
             };
             await importFeedProducts(feed);
-          } else if (automation.action_type === 'sync_to_shopify' && automation.channel_id) {
+          } else if (automation.action_type === 'sync_to_shopify' && automation.channel_id && automation.feed_id) {
             console.log(`[Scheduler] Running automation: ${automation.name} (sync to ${automation.channel_name})`);
+            const preset = automation.feed_type === 'odoo' ? 'price_stock_meta' : 'sync_all';
             // Create a sync job
             const jobResult = await query(
-              `INSERT INTO sync_jobs (client_id, channel_id, status, preset, total_products)
-               VALUES ($1, $2, 'pending', 'sync_all', 0)
+              `INSERT INTO sync_jobs (client_id, channel_id, feed_id, status, preset, total_products)
+               VALUES ($1, $2, $3, 'pending', $4, 0)
                RETURNING id`,
-              [automation.client_id, automation.channel_id]
+              [automation.client_id, automation.channel_id, automation.feed_id, preset]
             );
             const jobId = jobResult.rows[0].id;
             // Run it async
-            runSyncJob(jobId).catch(err => {
+            runSyncJob({
+              jobId,
+              channel: {
+                id: automation.channel_id,
+                shopify_store_url: automation.shopify_store_url,
+                shopify_access_token: automation.shopify_access_token,
+                shopify_api_version: automation.shopify_api_version,
+                settings: automation.settings,
+              },
+              feedId: automation.feed_id,
+              preset,
+              priceAdjustmentPercent: Number(automation.price_adjustment_percent || 0),
+            }).catch(err => {
               console.error(`[Scheduler] Sync job ${jobId} failed:`, err);
             });
           }
