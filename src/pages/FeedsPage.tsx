@@ -62,7 +62,7 @@ export default function FeedsPage() {
         payload.odoo_url = form.odoo_url;
         payload.odoo_database = form.odoo_database;
         payload.odoo_username = form.odoo_username;
-        if (form.odoo_api_key) payload.odoo_api_key = form.odoo_api_key;
+        payload.odoo_api_key = form.odoo_api_key;
       }
 
       if (editingFeed) {

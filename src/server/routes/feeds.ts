@@ -66,11 +66,11 @@ router.patch('/:id', async (req, res) => {
         odoo_url = COALESCE($7, odoo_url),
         odoo_database = COALESCE($8, odoo_database),
         odoo_username = COALESCE($9, odoo_username),
-        odoo_api_key = COALESCE($10, odoo_api_key),
+        odoo_api_key = COALESCE(NULLIF($10, ''), odoo_api_key),
         sync_interval_minutes = $11,
         updated_at = NOW()
        WHERE id = $12 RETURNING *`,
-      [name, type, spreadsheet_id, sheet_name, header_row, is_active, odoo_url, odoo_database, odoo_username, odoo_api_key || null, sync_interval_minutes ?? null, req.params.id]
+      [name, type, spreadsheet_id, sheet_name, header_row, is_active, odoo_url, odoo_database, odoo_username, odoo_api_key, sync_interval_minutes ?? null, req.params.id]
     );
     if (!result.rows[0]) return res.status(404).json({ error: 'Feed not found' });
     return res.json(result.rows[0]);
