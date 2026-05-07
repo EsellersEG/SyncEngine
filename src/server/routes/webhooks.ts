@@ -39,7 +39,7 @@ router.post('/shopify/orders', async (req: Request, res: Response) => {
 
     // Verify HMAC if we have a webhook secret in channel settings
     if (channel.settings?.webhook_secret && hmac) {
-      const rawBody = JSON.stringify(req.body);
+      const rawBody = (req as unknown as Record<string, unknown>).rawBody as string || JSON.stringify(req.body);
       if (!verifyShopifyHmac(rawBody, hmac, channel.settings.webhook_secret)) {
         console.warn(`[Webhook] HMAC verification failed for shop: ${shopDomain}`);
         return;
