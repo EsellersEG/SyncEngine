@@ -15,6 +15,7 @@ import mappingRoutes from './src/server/routes/mappings.js';
 import userRoutes from './src/server/routes/users.js';
 import orderRoutes from './src/server/routes/orders.js';
 import webhookRoutes from './src/server/routes/webhooks.js';
+import automationRoutes from './src/server/routes/automations.js';
 import { startScheduler } from './src/server/services/scheduler.js';
 
 dotenv.config();
@@ -41,6 +42,7 @@ app.use('/api/products', productRoutes);
 app.use('/api/sync', syncRoutes);
 app.use('/api/mappings', mappingRoutes);
 app.use('/api/orders', orderRoutes);
+app.use('/api/automations', automationRoutes);
 app.use('/webhooks', webhookRoutes);
 
 // ── Health Check ───────────────────────────────────────────────────────────

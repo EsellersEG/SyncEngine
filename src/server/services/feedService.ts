@@ -48,7 +48,7 @@ export async function fetchSheetData(feed: FeedRecord): Promise<{ headers: strin
 
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId: feed.spreadsheet_id,
-    range: feed.sheet_name,
+    range: `'${feed.sheet_name}'`,
   });
 
   const rawRows = response.data.values || [];
@@ -200,47 +200,59 @@ export async function importFeedProducts(feed: FeedRecord) {
 }
 
 /**
- * Auto-sync only the changed/created products to all Shopify channels for this client.
- * Only the SKUs that were updated or created during import are synced.
+ * Auto-sync only the changed/created products to Shopify channels
+ * that have an 'after_import' automation configured for this feed.
  */
 async function triggerAutoSync(feed: FeedRecord, changedSkus: string[]) {
-  // Find all active Shopify channels for this client
-  const channelsResult = await query(
-    "SELECT * FROM channels WHERE client_id = $1 AND type = 'shopify' AND status = 'active'",
-    [feed.client_id]
+  // Find 'after_import' automations for this feed
+  const automationsResult = await query(
+    `SELECT a.*, ch.id as ch_id, ch.name as ch_name
+     FROM automations a
+     JOIN channels ch ON a.channel_id = ch.id
+     WHERE a.feed_id = $1
+       AND a.trigger_type = 'after_import'
+       AND a.action_type = 'sync_to_shopify'
+       AND a.is_active = true`,
+    [feed.id]
   );
 
-  if (channelsResult.rows.length === 0) {
-    console.log('[FeedService] No active Shopify channels for auto-sync');
+  if (automationsResult.rows.length === 0) {
+    console.log('[FeedService] No after_import automations for this feed');
     return;
   }
 
-  for (const channel of channelsResult.rows) {
+  for (const automation of automationsResult.rows) {
+    const channelId = automation.ch_id;
+    const channelName = automation.ch_name;
+
     // Check if there's already a running job for this channel
     const running = await query(
       "SELECT id FROM sync_jobs WHERE channel_id = $1 AND status = 'running'",
-      [channel.id]
+      [channelId]
     );
     if (running.rows.length > 0) {
-      console.log(`[FeedService] Auto-sync skipped for channel ${channel.name} — job already running`);
+      console.log(`[FeedService] Auto-sync skipped for channel ${channelName} — job already running`);
       continue;
     }
 
     // Create a sync job
     const jobResult = await query(
-      `INSERT INTO sync_jobs (channel_id, feed_id, preset, total_products, status)
-       VALUES ($1, $2, 'sync_all', $3, 'pending')
+      `INSERT INTO sync_jobs (channel_id, feed_id, preset, total_products, status, client_id)
+       VALUES ($1, $2, 'sync_all', $3, 'pending', $4)
        RETURNING id`,
-      [channel.id, feed.id, changedSkus.length]
+      [channelId, feed.id, changedSkus.length, feed.client_id]
     );
     const jobId = jobResult.rows[0].id;
 
-    console.log(`[FeedService] Auto-sync triggered → Job ${jobId} for channel ${channel.name} (${changedSkus.length} changed products)`);
+    console.log(`[FeedService] Auto-sync triggered → Job ${jobId} for channel ${channelName} (${changedSkus.length} changed products)`);
 
-    // Run async — only sync the changed SKUs using full sync (creates new + updates existing)
+    // Update last_run_at on the automation
+    await query('UPDATE automations SET last_run_at = NOW() WHERE id = $1', [automation.id]);
+
+    // Run async
     runSyncJob({
       jobId,
-      channel,
+      channel: { id: channelId },
       feedId: feed.id,
       preset: 'sync_all',
       skus: changedSkus,

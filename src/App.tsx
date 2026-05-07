@@ -13,6 +13,7 @@ import MappingPage from './pages/MappingPage';
 import ProductsPage from './pages/ProductsPage';
 import UsersPage from './pages/UsersPage';
 import OrdersPage from './pages/OrdersPage';
+import AutomationsPage from './pages/AutomationsPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -45,6 +46,7 @@ function AppRoutes() {
         <Route path="channels" element={<ChannelsPage />} />
         <Route path="sync" element={<SyncPage />} />
         <Route path="mapping" element={<MappingPage />} />
+        <Route path="automations" element={<AutomationsPage />} />
         <Route path="products" element={<ProductsPage />} />
         <Route path="orders" element={<OrdersPage />} />
         <Route path="users" element={<UsersPage />} />

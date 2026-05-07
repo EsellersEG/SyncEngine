@@ -12,6 +12,7 @@ const navItems = [
   { to: '/channels', icon: GitBranch, label: 'Channels' },
   { to: '/products', icon: Package, label: 'Products' },
   { to: '/mapping', icon: Map, label: 'Attribute Mapping' },
+  { to: '/automations', icon: Activity, label: 'Automations' },
   { to: '/sync', icon: Zap, label: 'Sync Jobs' },
   { to: '/orders', icon: ShoppingBag, label: 'Orders' },
 ];

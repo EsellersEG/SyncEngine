@@ -70,6 +70,20 @@ async function init() {
         created_at TIMESTAMPTZ DEFAULT NOW(),
         UNIQUE(channel_id, shopify_order_id)
       )`,
+      `CREATE TABLE IF NOT EXISTS automations (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        client_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+        name VARCHAR(255) NOT NULL,
+        trigger_type VARCHAR(50) NOT NULL DEFAULT 'schedule',
+        action_type VARCHAR(50) NOT NULL DEFAULT 'import_feed',
+        feed_id UUID REFERENCES feeds(id) ON DELETE SET NULL,
+        channel_id UUID REFERENCES channels(id) ON DELETE SET NULL,
+        interval_minutes INT,
+        is_active BOOLEAN DEFAULT true,
+        last_run_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )`,
     ];
     for (const sql of migrations) {
       await client.query(sql);
