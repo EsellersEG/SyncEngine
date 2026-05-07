@@ -735,7 +735,7 @@ async function syncVariantGroup(
   const input: Record<string, unknown> = {
     title: first.mapped.title || first.row.sku,
     handle: group.handle,
-    productOptions,
+    productOptions: productOptions.map(({ name, position, values }) => ({ name, position, values })),
     variants: mappedRows.map((entry, index) => {
       const shopifyIds = shopifyMap.get(entry.row.sku);
       const optionValues = productOptions.map(option => ({
