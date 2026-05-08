@@ -800,10 +800,6 @@ async function createShopifyProduct(channel: Channel, sku: string, mapped: Recor
     }
   }
 }
-
-          if (mapped.variant_fulfillment_service && String(mapped.variant_fulfillment_service).startsWith('gid://shopify/FulfillmentService/')) {
-            variantInput.fulfillmentServiceId = String(mapped.variant_fulfillment_service);
-          }
 // ── Publish product to all sales channels ──────────────────────────────────
 async function publishToSalesChannels(channel: Channel, productId: string) {
   try {
