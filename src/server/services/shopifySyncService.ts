@@ -166,6 +166,15 @@ function isTruthyValue(value: unknown): boolean {
   return ['true', '1', 'yes'].includes(String(value).toLowerCase());
 }
 
+function isValidImageUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.protocol === 'http:' || u.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 async function updateInventoryItemDetails(
   channel: Channel,
   inventoryItemId: string,
@@ -741,7 +750,7 @@ async function syncGroupedProduct(
 
         const updateImageSource = mapped.variant_image || mapped.image_url;
         if (withImages && updateImageSource) {
-          const urls = String(updateImageSource).split(',').map(u => u.trim()).filter(Boolean);
+          const urls = String(updateImageSource).split(',').map(u => u.trim()).filter(isValidImageUrl);
           if (urls.length > 0) {
             // Delete existing images first, then upload new ones
             await deleteExistingProductMedia(channel, shopifyIds.productId);
@@ -814,7 +823,7 @@ async function createShopifyProduct(channel: Channel, sku: string, mapped: Recor
   const media: Array<{ originalSource: string; mediaContentType: string }> = [];
   const createImageSource = mapped.variant_image || mapped.image_url;
   if (withImages && createImageSource) {
-    const urls = String(createImageSource).split(',').map(u => u.trim()).filter(Boolean);
+    const urls = String(createImageSource).split(',').map(u => u.trim()).filter(isValidImageUrl);
     for (const url of urls) {
       media.push({ originalSource: url, mediaContentType: 'IMAGE' });
     }
@@ -1035,7 +1044,7 @@ async function syncVariantGroup(
   const fileMap = new Map<string, { originalSource: string; contentType: string }>();
   if (withImages) {
     for (const entry of mappedRows) {
-      const urls = String(entry.mapped.image_url || '').split(',').map(url => url.trim()).filter(Boolean);
+      const urls = String(entry.mapped.image_url || '').split(',').map(url => url.trim()).filter(isValidImageUrl);
       for (const url of urls) {
         if (!fileMap.has(url)) fileMap.set(url, { originalSource: url, contentType: 'IMAGE' });
       }
