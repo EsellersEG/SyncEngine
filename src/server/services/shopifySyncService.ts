@@ -343,6 +343,66 @@ async function getShopifyProductMap(channel: Channel): Promise<Map<string, { pro
   return map;
 }
 
+// Fast lookup for small number of SKUs — avoids loading entire 25K catalog
+async function getShopifyProductMapForSKUs(
+  channel: Channel,
+  skus: string[]
+): Promise<Map<string, { productId: string; variantId: string; inventoryItemId: string }>> {
+  const map = new Map<string, { productId: string; variantId: string; inventoryItemId: string }>();
+
+  // Query up to 10 SKUs at a time using search
+  for (let i = 0; i < skus.length; i += 10) {
+    const batch = skus.slice(i, i + 10);
+    const searchQuery = batch.map(sku => `sku:${sku}`).join(' OR ');
+    const gqlQuery = `
+      query findProducts($query: String!) {
+        products(first: 50, query: $query) {
+          edges {
+            node {
+              id
+              variants(first: 100) {
+                edges {
+                  node {
+                    id
+                    sku
+                    barcode
+                    inventoryItem { id }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }`;
+    const data = await shopifyGraphQL(channel, gqlQuery, { query: searchQuery }) as {
+      products: {
+        edges: Array<{
+          node: {
+            id: string;
+            variants: { edges: Array<{ node: { id: string; sku: string; barcode: string; inventoryItem: { id: string } } }> };
+          };
+        }>;
+      };
+    };
+
+    for (const productEdge of data.products.edges) {
+      for (const variantEdge of productEdge.node.variants.edges) {
+        const v = variantEdge.node;
+        const entry = {
+          productId: productEdge.node.id,
+          variantId: v.id,
+          inventoryItemId: v.inventoryItem.id,
+        };
+        if (v.sku) map.set(v.sku, entry);
+        if (v.barcode && !map.has(v.barcode)) map.set(v.barcode, entry);
+      }
+    }
+  }
+
+  console.log(`[SyncFlow] Fast SKU lookup: ${map.size} entries for ${skus.length} SKUs`);
+  return map;
+}
+
 // ── Turbo Mode: parallel price/stock updates ──────────────────────────────
 async function turboSync(
   channel: Channel,
@@ -352,7 +412,9 @@ async function turboSync(
   priceAdjustmentPercent = 0,
   priceRoundingMode: 'none' | 'up' | 'down' = 'none'
 ) {
-  const shopifyMap = await getShopifyProductMap(channel);
+  const shopifyMap = products.length <= 50
+    ? await getShopifyProductMapForSKUs(channel, products.map(p => p.sku))
+    : await getShopifyProductMap(channel);
 
   // Pre-resolve location once
   let locationId = channel.settings?.stock_location_id;
@@ -494,7 +556,9 @@ async function individualSync(
   priceAdjustmentPercent = 0,
   priceRoundingMode: 'none' | 'up' | 'down' = 'none'
 ) {
-  const shopifyMap = await getShopifyProductMap(channel);
+  const shopifyMap = products.length <= 50
+    ? await getShopifyProductMapForSKUs(channel, products.map(p => p.sku))
+    : await getShopifyProductMap(channel);
 
   // Pre-resolve location once
   let locationId = channel.settings?.stock_location_id;
@@ -1145,8 +1209,6 @@ function inferVariantOptionFromRows(rows: ProductRow[]): { name: string; valuesB
     const distinctValues = Array.from(new Set(Object.values(valuesBySku)));
     if (distinctValues.length > 1) {
       return { name: matchingHeader, valuesBySku };
-        if (mapped.handle) input.handle = normalizeHandle(mapped.handle);
-        if (mapped.product_type) input.productType = mapped.product_type;
     }
   }
 
