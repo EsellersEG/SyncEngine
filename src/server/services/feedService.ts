@@ -92,7 +92,7 @@ export async function fetchSheetData(feed: FeedRecord): Promise<{ headers: strin
 
 export async function previewFeed(feed: FeedRecord, limit = 10) {
   if (feed.type === 'odoo') {
-    const config: OdooConfig = { url: feed.odoo_url!, database: feed.odoo_database!, username: feed.odoo_username!, apiKey: feed.odoo_api_key!, productSearchBy: feed.odoo_search_by || 'automatic' };
+    const config: OdooConfig = { url: feed.odoo_url!, database: feed.odoo_database!, username: feed.odoo_username!, apiKey: feed.odoo_api_key!, productSearchBy: feed.odoo_search_by || 'automatic', warehouseId: feed.odoo_warehouse_id || undefined };
     const { headers, rows } = await fetchOdooProducts(config);
     return { headers, rows: rows.slice(0, limit), total: rows.length };
   }
@@ -125,7 +125,7 @@ export async function importFeedProducts(feed: FeedRecord) {
 
     if (feed.type === 'odoo') {
       // Odoo feed — fetch via XML-RPC
-      const config: OdooConfig = { url: feed.odoo_url!, database: feed.odoo_database!, username: feed.odoo_username!, apiKey: feed.odoo_api_key!, productSearchBy: feed.odoo_search_by || 'automatic' };
+      const config: OdooConfig = { url: feed.odoo_url!, database: feed.odoo_database!, username: feed.odoo_username!, apiKey: feed.odoo_api_key!, productSearchBy: feed.odoo_search_by || 'automatic', warehouseId: feed.odoo_warehouse_id || undefined };
       const result = await fetchOdooProducts(config);
       headers = result.headers;
       rows = result.rows;

@@ -9,6 +9,7 @@ interface Feed {
   last_row_count: number; product_count: string; created_at: string;
   odoo_url?: string; odoo_database?: string; odoo_username?: string; odoo_api_key?: string;
   odoo_search_by?: 'automatic' | 'sku' | 'ean' | 'name';
+  odoo_warehouse_id?: number | null;
   sync_interval_minutes?: number | null;
 }
 interface Client { id: string; name: string; }
@@ -31,6 +32,7 @@ export default function FeedsPage() {
     spreadsheet_id: '', sheet_name: 'Sheet1', header_row: 1,
     odoo_url: '', odoo_database: '', odoo_username: '', odoo_api_key: '',
     odoo_search_by: 'automatic' as 'automatic' | 'sku' | 'ean' | 'name',
+    odoo_warehouse_id: '',
     sync_interval_minutes: '',
   });
   const [error, setError] = useState('');
@@ -67,6 +69,7 @@ export default function FeedsPage() {
         payload.odoo_username = form.odoo_username;
         payload.odoo_api_key = form.odoo_api_key;
         payload.odoo_search_by = form.odoo_search_by;
+        payload.odoo_warehouse_id = form.odoo_warehouse_id || null;
       }
 
       if (editingFeed) {
@@ -142,7 +145,7 @@ export default function FeedsPage() {
 
   function openCreateModal() {
     setEditingFeed(null);
-    setForm({ client_id: clientId || '', name: '', type: 'google_sheets', spreadsheet_id: '', sheet_name: 'Sheet1', header_row: 1, odoo_url: '', odoo_database: '', odoo_username: '', odoo_api_key: '', odoo_search_by: 'automatic', sync_interval_minutes: '' });
+    setForm({ client_id: clientId || '', name: '', type: 'google_sheets', spreadsheet_id: '', sheet_name: 'Sheet1', header_row: 1, odoo_url: '', odoo_database: '', odoo_username: '', odoo_api_key: '', odoo_search_by: 'automatic', odoo_warehouse_id: '', sync_interval_minutes: '' });
     setError('');
     setTestResult(null);
     setShowModal(true);
@@ -237,6 +240,7 @@ export default function FeedsPage() {
                             odoo_url: feed.odoo_url || '', odoo_database: feed.odoo_database || '',
                             odoo_username: feed.odoo_username || '', odoo_api_key: '',
                             odoo_search_by: feed.odoo_search_by || 'automatic',
+                            odoo_warehouse_id: feed.odoo_warehouse_id ? String(feed.odoo_warehouse_id) : '',
                             sync_interval_minutes: feed.sync_interval_minutes ? String(feed.sync_interval_minutes) : '',
                           });
                           setError('');
@@ -371,6 +375,12 @@ export default function FeedsPage() {
                       <option value="ean">EAN</option>
                       <option value="name">Name</option>
                     </select>
+                  </div>
+                  <div className="form-group">
+                    <label className="label">Warehouse ID (optional)</label>
+                    <input className="input" type="number" placeholder="e.g. 3" value={form.odoo_warehouse_id}
+                      onChange={e => setForm(f => ({ ...f, odoo_warehouse_id: e.target.value }))} />
+                    <span style={{ fontSize: 11, color: '#64748b' }}>Odoo warehouse ID to scope stock quantities. Leave empty for total stock.</span>
                   </div>
                   <button type="button" className="btn btn-secondary btn-sm" onClick={handleTestOdoo} disabled={testing || !form.odoo_url || !form.odoo_database || !form.odoo_username || !form.odoo_api_key}>
                     {testing ? <><Loader2 size={12} className="spinner" /> Testing...</> : <><CheckCircle size={12} /> Test Connection</>}

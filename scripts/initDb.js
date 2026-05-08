@@ -91,6 +91,7 @@ async function init() {
       `ALTER TABLE automations ADD COLUMN IF NOT EXISTS price_adjustment_percent DECIMAL(5,2) DEFAULT 0`,
       `ALTER TABLE automations ADD COLUMN IF NOT EXISTS rounding_mode VARCHAR(20) NOT NULL DEFAULT 'none'`,
       `ALTER TABLE orders ADD COLUMN IF NOT EXISTS odoo_order_name VARCHAR(100)`,
+      `ALTER TABLE feeds ADD COLUMN IF NOT EXISTS odoo_warehouse_id INT`,
     ];
     for (const sql of migrations) {
       await client.query(sql);

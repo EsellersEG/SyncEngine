@@ -10,6 +10,7 @@ export interface OdooConfig {
   username: string;   // e.g. "admin@company.com"
   apiKey: string;     // API key or password
   productSearchBy?: 'automatic' | 'sku' | 'ean' | 'name';
+  warehouseId?: number; // Odoo warehouse ID to scope qty_available
 }
 
 interface FeedRow {
@@ -292,9 +293,13 @@ export async function fetchOdooProducts(config: OdooConfig): Promise<{ headers: 
   const allProducts: Array<Record<string, unknown>> = [];
 
   while (true) {
+    const kwargs: Record<string, unknown> = { fields, limit: PAGE_SIZE, offset };
+    if (config.warehouseId) {
+      kwargs.context = { warehouse: config.warehouseId };
+    }
     const batch = await odooExecute(config, uid, 'product.product', 'search_read', [
       [['active', '=', true], ['type', '=', 'product']]
-    ], { fields, limit: PAGE_SIZE, offset }) as Array<Record<string, unknown>>;
+    ], kwargs) as Array<Record<string, unknown>>;
 
     if (!batch || batch.length === 0) break;
     allProducts.push(...batch);

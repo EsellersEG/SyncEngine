@@ -41,6 +41,7 @@ router.post('/', async (req: AuthRequest, res) => {
       odoo_username,
       odoo_api_key,
       odoo_search_by,
+      odoo_warehouse_id,
       sync_interval_minutes,
     } = req.body;
     if (!client_id || !name) {
@@ -56,10 +57,10 @@ router.post('/', async (req: AuthRequest, res) => {
       ? odoo_search_by
       : 'automatic';
     const result = await query(
-      `INSERT INTO feeds (client_id, name, type, spreadsheet_id, sheet_name, header_row, service_account_json, odoo_url, odoo_database, odoo_username, odoo_api_key, odoo_search_by, sync_interval_minutes)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      `INSERT INTO feeds (client_id, name, type, spreadsheet_id, sheet_name, header_row, service_account_json, odoo_url, odoo_database, odoo_username, odoo_api_key, odoo_search_by, odoo_warehouse_id, sync_interval_minutes)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
        RETURNING *`,
-      [client_id, name, type, spreadsheet_id || '', sheet_name, header_row, service_account_json || null, odoo_url || null, odoo_database || null, odoo_username || null, odoo_api_key || null, normalizedOdooSearchBy, sync_interval_minutes || null]
+      [client_id, name, type, spreadsheet_id || '', sheet_name, header_row, service_account_json || null, odoo_url || null, odoo_database || null, odoo_username || null, odoo_api_key || null, normalizedOdooSearchBy, odoo_warehouse_id ? parseInt(odoo_warehouse_id) : null, sync_interval_minutes || null]
     );
     return res.status(201).json(result.rows[0]);
   } catch (err) {
@@ -83,6 +84,7 @@ router.patch('/:id', async (req, res) => {
       odoo_username,
       odoo_api_key,
       odoo_search_by,
+      odoo_warehouse_id,
       sync_interval_minutes,
     } = req.body;
     const normalizedOdooSearchBy = odoo_search_by === 'sku' || odoo_search_by === 'ean' || odoo_search_by === 'name'
@@ -103,10 +105,11 @@ router.patch('/:id', async (req, res) => {
         odoo_username = COALESCE($9, odoo_username),
         odoo_api_key = COALESCE(NULLIF($10, ''), odoo_api_key),
         odoo_search_by = COALESCE($11, odoo_search_by),
-        sync_interval_minutes = $12,
+        odoo_warehouse_id = $12,
+        sync_interval_minutes = $13,
         updated_at = NOW()
-       WHERE id = $13 RETURNING *`,
-      [name, type, spreadsheet_id, sheet_name, header_row, is_active, odoo_url, odoo_database, odoo_username, odoo_api_key, normalizedOdooSearchBy, sync_interval_minutes ?? null, req.params.id]
+       WHERE id = $14 RETURNING *`,
+      [name, type, spreadsheet_id, sheet_name, header_row, is_active, odoo_url, odoo_database, odoo_username, odoo_api_key, normalizedOdooSearchBy, odoo_warehouse_id !== undefined ? (odoo_warehouse_id ? parseInt(odoo_warehouse_id) : null) : null, sync_interval_minutes ?? null, req.params.id]
     );
     if (!result.rows[0]) return res.status(404).json({ error: 'Feed not found' });
     return res.json(result.rows[0]);
