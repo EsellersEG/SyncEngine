@@ -279,6 +279,14 @@ export async function testOdooConnection(config: OdooConfig): Promise<{ success:
   return { success: true, productCount: count, uid };
 }
 
+export async function fetchOdooWarehouses(config: OdooConfig): Promise<Array<{ id: number; name: string }>> {
+  const uid = await odooAuthenticate(config);
+  const warehouses = await odooExecute(config, uid, 'stock.warehouse', 'search_read', [
+    []
+  ], { fields: ['id', 'name'], order: 'name' }) as Array<{ id: number; name: string }>;
+  return warehouses || [];
+}
+
 export async function fetchOdooProducts(config: OdooConfig): Promise<{ headers: string[]; rows: FeedRow[] }> {
   const uid = await odooAuthenticate(config);
 

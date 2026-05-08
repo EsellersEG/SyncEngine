@@ -193,4 +193,20 @@ router.post('/test-odoo', async (req: AuthRequest, res) => {
   }
 });
 
+// POST /api/feeds/odoo-warehouses — list Odoo warehouses
+router.post('/odoo-warehouses', async (req: AuthRequest, res) => {
+  try {
+    const { url, database, username, api_key } = req.body;
+    if (!url || !database || !username || !api_key) {
+      return res.status(400).json({ error: 'url, database, username, and api_key required' });
+    }
+    const { fetchOdooWarehouses } = await import('../services/odooService.js');
+    const warehouses = await fetchOdooWarehouses({ url, database, username, apiKey: api_key });
+    return res.json(warehouses);
+  } catch (err) {
+    console.error('Odoo warehouses fetch failed:', err);
+    return res.status(400).json({ error: err instanceof Error ? err.message : 'Failed to fetch warehouses' });
+  }
+});
+
 export default router;

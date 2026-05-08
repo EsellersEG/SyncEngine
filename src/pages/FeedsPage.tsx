@@ -38,6 +38,8 @@ export default function FeedsPage() {
   const [error, setError] = useState('');
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
+  const [odooWarehouses, setOdooWarehouses] = useState<Array<{ id: number; name: string }>>([]);
+  const [loadingWarehouses, setLoadingWarehouses] = useState(false);
 
   useEffect(() => {
     Promise.all([
@@ -95,11 +97,27 @@ export default function FeedsPage() {
         username: form.odoo_username, api_key: form.odoo_api_key,
       }) as { success: boolean; productCount: number };
       setTestResult(`Connected! ${result.productCount} products found.`);
+      // Also fetch warehouses
+      fetchWarehouses();
     } catch (err: unknown) {
       setTestResult(err instanceof Error ? err.message : 'Connection failed');
     } finally {
       setTesting(false);
     }
+  }
+
+  async function fetchWarehouses(overrideApiKey?: string) {
+    setLoadingWarehouses(true);
+    try {
+      const apiKey = overrideApiKey || form.odoo_api_key;
+      if (!form.odoo_url || !form.odoo_database || !form.odoo_username || !apiKey) return;
+      const wh = await api.post('/feeds/odoo-warehouses', {
+        url: form.odoo_url, database: form.odoo_database,
+        username: form.odoo_username, api_key: apiKey,
+      }) as Array<{ id: number; name: string }>;
+      setOdooWarehouses(wh);
+    } catch { /* ignore */ }
+    finally { setLoadingWarehouses(false); }
   }
 
   async function handleImport(feedId: string) {
@@ -245,7 +263,12 @@ export default function FeedsPage() {
                           });
                           setError('');
                           setTestResult(null);
+                          setOdooWarehouses([]);
                           setShowModal(true);
+                          // Auto-fetch warehouses for Odoo feeds
+                          if ((feed.type || 'google_sheets') === 'odoo' && feed.odoo_url && feed.odoo_database && feed.odoo_username && feed.odoo_api_key) {
+                            setTimeout(() => fetchWarehouses(feed.odoo_api_key), 100);
+                          }
                         }} title="Edit feed">
                           <Pencil size={12} />
                         </button>
@@ -377,10 +400,19 @@ export default function FeedsPage() {
                     </select>
                   </div>
                   <div className="form-group">
-                    <label className="label">Warehouse ID (optional)</label>
-                    <input className="input" type="number" placeholder="e.g. 3" value={form.odoo_warehouse_id}
-                      onChange={e => setForm(f => ({ ...f, odoo_warehouse_id: e.target.value }))} />
-                    <span style={{ fontSize: 11, color: '#64748b' }}>Odoo warehouse ID to scope stock quantities. Leave empty for total stock.</span>
+                    <label className="label">Warehouse (optional)</label>
+                    <select className="input" value={form.odoo_warehouse_id}
+                      onChange={e => setForm(f => ({ ...f, odoo_warehouse_id: e.target.value }))}>
+                      <option value="">All warehouses (total stock)</option>
+                      {odooWarehouses.map(wh => (
+                        <option key={wh.id} value={String(wh.id)}>{wh.name}</option>
+                      ))}
+                    </select>
+                    {odooWarehouses.length === 0 && (
+                      <span style={{ fontSize: 11, color: '#64748b' }}>
+                        {loadingWarehouses ? 'Loading warehouses...' : 'Click "Test Connection" to load warehouses'}
+                      </span>
+                    )}
                   </div>
                   <button type="button" className="btn btn-secondary btn-sm" onClick={handleTestOdoo} disabled={testing || !form.odoo_url || !form.odoo_database || !form.odoo_username || !form.odoo_api_key}>
                     {testing ? <><Loader2 size={12} className="spinner" /> Testing...</> : <><CheckCircle size={12} /> Test Connection</>}
