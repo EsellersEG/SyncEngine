@@ -51,6 +51,15 @@ router.post('/start', async (req: AuthRequest, res) => {
       ? automationConfig.rounding_mode
       : 'none';
 
+    // Auto-fail stale running jobs (older than 15 minutes) so new syncs aren't blocked
+    await query(
+      `UPDATE sync_jobs SET status = 'failed', completed_at = NOW(),
+              error_message = 'Job timed out — no progress for over 15 minutes'
+       WHERE channel_id = $1 AND status = 'running'
+         AND started_at < NOW() - INTERVAL '15 minutes'`,
+      [channel_id]
+    );
+
     // Check for already running job
     const running = await query(
       "SELECT id FROM sync_jobs WHERE channel_id = $1 AND status = 'running'",

@@ -690,13 +690,14 @@ export default function SyncPage() {
                   {job.total_products > 0 && (
                     <div style={{ marginTop: 8 }}>
                       <div className="progress-bar">
-                        <div className="progress-fill" style={{ width: `${Math.min(100, Math.round(((job.created_count + job.updated_count + job.failed_count) / job.total_products) * 100))}%` }} />
+                        <div className="progress-fill" style={{ width: `${Math.min(100, Math.round(((job.created_count + job.updated_count + job.failed_count + job.skipped_count) / job.total_products) * 100))}%` }} />
                       </div>
                       <div style={{ display: 'flex', gap: 10, marginTop: 4, fontSize: 11 }}>
                         <span style={{ color: '#4ade80' }}>+{job.created_count}</span>
                         <span style={{ color: '#60a5fa' }}>↻{job.updated_count}</span>
                         <span style={{ color: '#f87171' }}>✗{job.failed_count}</span>
-                        <span style={{ color: '#64748b', marginLeft: 'auto' }}>{job.created_count + job.updated_count + job.failed_count}/{job.total_products}</span>
+                        {job.skipped_count > 0 && <span style={{ color: '#fbbf24' }}>⊘{job.skipped_count}</span>}
+                        <span style={{ color: '#64748b', marginLeft: 'auto' }}>{job.created_count + job.updated_count + job.failed_count + job.skipped_count}/{job.total_products}</span>
                       </div>
                     </div>
                   )}

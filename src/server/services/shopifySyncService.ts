@@ -67,9 +67,26 @@ async function isJobCancelled(jobId: string): Promise<boolean> {
   return false;
 }
 
+const FETCH_TIMEOUT_MS = 30000; // 30-second timeout per request
+
 // ── Rate-limited fetch with retry ──────────────────────────────────────────
 async function shopifyFetchWithRetry(url: string, options: RequestInit, retries = 0): Promise<Response> {
-  const res = await fetch(url, options);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(url, { ...options, signal: controller.signal });
+  } catch (err: unknown) {
+    clearTimeout(timeoutId);
+    if (err instanceof Error && err.name === 'AbortError' && retries < MAX_RETRIES) {
+      const backoff = RETRY_DELAY_MS * Math.pow(1.5, retries);
+      console.log(`[SyncFlow] Request timed out after ${FETCH_TIMEOUT_MS}ms, retrying in ${Math.round(backoff)}ms (retry ${retries + 1})`);
+      await sleep(backoff);
+      return shopifyFetchWithRetry(url, options, retries + 1);
+    }
+    throw err;
+  }
+  clearTimeout(timeoutId);
   if (res.status === 429) {
     const retryAfter = parseFloat(res.headers.get('Retry-After') || '2') * 1000;
     const backoff = Math.max(retryAfter, RETRY_DELAY_MS * Math.pow(1.5, retries));

@@ -17,6 +17,7 @@ import orderRoutes from './src/server/routes/orders.js';
 import webhookRoutes from './src/server/routes/webhooks.js';
 import automationRoutes from './src/server/routes/automations.js';
 import { startScheduler } from './src/server/services/scheduler.js';
+import { query } from './src/server/db.js';
 
 dotenv.config();
 
@@ -69,9 +70,37 @@ app.get('/{*path}', (_req, res) => {
 
 // ── Start Server ───────────────────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT || '8080', 10);
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`🚀 Sync-Engine server running on port ${PORT}`);
   console.log(`   Environment: ${process.env.NODE_ENV || 'development'}`);
+
+  // Clean up orphaned running/pending jobs from previous deploys/crashes
+  try {
+    const cleaned = await query(
+      `UPDATE sync_jobs SET status = 'failed', completed_at = NOW(),
+              error_message = 'Server restarted during sync — job was interrupted'
+       WHERE status IN ('running', 'pending')
+         AND started_at < NOW() - INTERVAL '10 minutes'
+       RETURNING id`
+    );
+    if (cleaned.rows.length > 0) {
+      console.log(`[Startup] Cleaned ${cleaned.rows.length} orphaned sync jobs: ${cleaned.rows.map((r: { id: string }) => r.id).join(', ')}`);
+    }
+    // Also clean pending jobs that never started (no started_at)
+    const cleanedPending = await query(
+      `UPDATE sync_jobs SET status = 'failed', completed_at = NOW(),
+              error_message = 'Server restarted — job never started'
+       WHERE status = 'pending'
+         AND created_at < NOW() - INTERVAL '10 minutes'
+       RETURNING id`
+    );
+    if (cleanedPending.rows.length > 0) {
+      console.log(`[Startup] Cleaned ${cleanedPending.rows.length} stale pending jobs`);
+    }
+  } catch (err) {
+    console.error('[Startup] Failed to clean orphaned jobs:', err);
+  }
+
   startScheduler();
 });
 
