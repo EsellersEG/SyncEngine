@@ -353,7 +353,7 @@ async function getShopifyProductMapForSKUs(
   // Query up to 10 SKUs at a time using search
   for (let i = 0; i < skus.length; i += 10) {
     const batch = skus.slice(i, i + 10);
-    const searchQuery = batch.map(sku => `sku:${sku}`).join(' OR ');
+    const searchQuery = batch.map(sku => `sku:\"${sku.replace(/"/g, '\\\"')}\"`).join(' OR ');
     const gqlQuery = `
       query findProducts($query: String!) {
         products(first: 50, query: $query) {
@@ -641,7 +641,6 @@ async function syncGroupedProduct(
           }`;
         const input: Record<string, unknown> = { id: shopifyIds.productId };
         if (mapped.title) input.title = mapped.title;
-        if (mapped.handle) input.handle = normalizeHandle(mapped.handle);
         if (mapped.body_html) input.descriptionHtml = mapped.body_html;
         if (mapped.tags) input.tags = String(mapped.tags).split(',').map(t => t.trim());
         if (mapped.vendor) input.vendor = mapped.vendor;
