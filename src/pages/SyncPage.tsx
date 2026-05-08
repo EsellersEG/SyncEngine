@@ -365,7 +365,7 @@ export default function SyncPage() {
                           job.status === 'pending' ? 'badge-warning' : 'badge-muted'
                         }`}>{job.status === 'completed' && job.failed_count > 0 ? 'Partial' : job.status}</span>
                       </td>
-                      <td><span className="badge badge-info">{job.preset === 'price_stock_meta' ? 'Price Only' : job.preset === 'sync_all_no_images' ? 'No Images' : job.preset === 'sync_all' ? 'Sync All' : 'Custom'}</span></td>
+                      <td><span className="badge badge-info">{job.preset === 'price_stock_meta' ? 'Price + Stock + Meta' : job.preset === 'sync_all_no_images' ? 'No Images' : job.preset === 'sync_all' ? 'Sync All' : 'Custom'}</span></td>
                       <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: '#94a3b8' }}>
                         {(job.created_count + job.updated_count + job.failed_count + job.skipped_count)}/{job.total_products}
                       </td>
@@ -419,7 +419,7 @@ export default function SyncPage() {
                   <option value="">All Syncs</option>
                   {jobs.map(j => (
                     <option key={j.id} value={j.id}>
-                      {new Date(j.created_at).toLocaleString()} - {j.preset === 'price_stock_meta' ? 'PRICE' : 'ALL'}
+                      {new Date(j.created_at).toLocaleString()} - {j.preset === 'price_stock_meta' ? 'PRICE+STOCK+META' : 'ALL'}
                     </option>
                   ))}
                 </select>

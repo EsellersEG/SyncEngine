@@ -92,13 +92,14 @@ export default function FeedsPage() {
     setTesting(true);
     setTestResult(null);
     try {
+      const effectiveKey = form.odoo_api_key || editingFeed?.odoo_api_key || '';
       const result = await api.post('/feeds/test-odoo', {
         url: form.odoo_url, database: form.odoo_database,
-        username: form.odoo_username, api_key: form.odoo_api_key,
+        username: form.odoo_username, api_key: effectiveKey,
       }) as { success: boolean; productCount: number };
       setTestResult(`Connected! ${result.productCount} products found.`);
       // Also fetch warehouses
-      fetchWarehouses();
+      fetchWarehouses(form.odoo_url, form.odoo_database, form.odoo_username, effectiveKey);
     } catch (err: unknown) {
       setTestResult(err instanceof Error ? err.message : 'Connection failed');
     } finally {
@@ -118,8 +119,10 @@ export default function FeedsPage() {
         url, database, username, api_key: apiKey,
       }) as Array<{ id: number; name: string }>;
       setOdooWarehouses(wh);
-    } catch { /* ignore */ }
-    finally { setLoadingWarehouses(false); }
+    } catch (err: unknown) {
+      console.error('Warehouse fetch failed:', err);
+      setTestResult(err instanceof Error ? err.message : 'Failed to load warehouses');
+    } finally { setLoadingWarehouses(false); }
   }
 
   async function handleImport(feedId: string) {
@@ -416,7 +419,7 @@ export default function FeedsPage() {
                       </span>
                     )}
                   </div>
-                  <button type="button" className="btn btn-secondary btn-sm" onClick={handleTestOdoo} disabled={testing || !form.odoo_url || !form.odoo_database || !form.odoo_username || !form.odoo_api_key}>
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={handleTestOdoo} disabled={testing || !form.odoo_url || !form.odoo_database || !form.odoo_username || (!form.odoo_api_key && !editingFeed?.odoo_api_key)}>
                     {testing ? <><Loader2 size={12} className="spinner" /> Testing...</> : <><CheckCircle size={12} /> Test Connection</>}
                   </button>
                   {testResult && (

@@ -511,9 +511,13 @@ async function syncProductTurbo(
               userErrors { field message }
             }
           }`;
-        await shopifyGraphQL(channel, updateMutation, {
+        const metaResult = await shopifyGraphQL(channel, updateMutation, {
           input: { id: shopifyIds.productId, metafields },
-        });
+        }) as { productUpdate?: { userErrors?: Array<{ field: string; message: string }> } };
+        const metaErrors = metaResult?.productUpdate?.userErrors;
+        if (metaErrors && metaErrors.length > 0) {
+          console.error(`[SyncFlow] Metafield update failed for ${product.sku}: ${JSON.stringify(metaErrors)}`);
+        }
       }
     }
 
@@ -526,14 +530,18 @@ async function syncProductTurbo(
             userErrors { field message }
           }
         }`;
-      await shopifyGraphQL(channel, priceQuery, {
+      const priceResult = await shopifyGraphQL(channel, priceQuery, {
         productId: shopifyIds.productId,
         variants: [{
           id: shopifyIds.variantId,
           price: mapped.price ? String(mapped.price) : undefined,
           compareAtPrice: mapped.compare_at_price ? String(mapped.compare_at_price) : undefined,
         }],
-      });
+      }) as { productVariantsBulkUpdate?: { userErrors?: Array<{ field: string; message: string }> } };
+      const priceErrors = priceResult?.productVariantsBulkUpdate?.userErrors;
+      if (priceErrors && priceErrors.length > 0) {
+        console.error(`[SyncFlow] Price update failed for ${product.sku}: ${JSON.stringify(priceErrors)}`);
+      }
     }
 
     await updateInventoryItemDetails(channel, shopifyIds.inventoryItemId, mapped);
