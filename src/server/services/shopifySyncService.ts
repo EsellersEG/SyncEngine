@@ -698,7 +698,7 @@ async function syncGroupedProduct(
           if (mapped.compare_at_price) variantInput.compareAtPrice = String(mapped.compare_at_price);
           if (mapped.barcode) variantInput.barcode = String(mapped.barcode);
           if (mapped.variant_requires_shipping !== undefined) {
-            variantInput.requiresShipping = isTruthyValue(mapped.variant_requires_shipping);
+            variantInput.inventoryItem = { ...(variantInput.inventoryItem as Record<string, unknown> ?? {}), requiresShipping: isTruthyValue(mapped.variant_requires_shipping) };
           }
           if (mapped.variant_inventory_policy) {
             variantInput.inventoryPolicy = String(mapped.variant_inventory_policy).toUpperCase();
@@ -850,7 +850,7 @@ async function createShopifyProduct(channel: Channel, sku: string, mapped: Recor
     };
     if (mapped.barcode) variantInput.barcode = String(mapped.barcode);
     if (mapped.variant_requires_shipping !== undefined) {
-      variantInput.requiresShipping = isTruthyValue(mapped.variant_requires_shipping);
+      (variantInput.inventoryItem as Record<string, unknown>).requiresShipping = isTruthyValue(mapped.variant_requires_shipping);
     }
     if (mapped.variant_inventory_policy) {
       variantInput.inventoryPolicy = String(mapped.variant_inventory_policy).toUpperCase();
@@ -1079,7 +1079,7 @@ async function syncVariantGroup(
       if (entry.mapped.barcode) variant.barcode = String(entry.mapped.barcode);
       if (entry.mapped.taxable !== undefined) variant.taxable = isTruthyValue(entry.mapped.taxable);
       if (entry.mapped.variant_requires_shipping !== undefined) {
-        variant.requiresShipping = isTruthyValue(entry.mapped.variant_requires_shipping);
+        variant.inventoryItem = { ...(variant.inventoryItem as Record<string, unknown> ?? {}), requiresShipping: isTruthyValue(entry.mapped.variant_requires_shipping) };
       }
       if (entry.mapped.variant_inventory_policy) {
         variant.inventoryPolicy = String(entry.mapped.variant_inventory_policy).toUpperCase();
