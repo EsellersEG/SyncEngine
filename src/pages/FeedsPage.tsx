@@ -106,14 +106,16 @@ export default function FeedsPage() {
     }
   }
 
-  async function fetchWarehouses(overrideApiKey?: string) {
+  async function fetchWarehouses(odooUrl?: string, odooDb?: string, odooUser?: string, odooKey?: string) {
     setLoadingWarehouses(true);
     try {
-      const apiKey = overrideApiKey || form.odoo_api_key;
-      if (!form.odoo_url || !form.odoo_database || !form.odoo_username || !apiKey) return;
+      const url = odooUrl || form.odoo_url;
+      const database = odooDb || form.odoo_database;
+      const username = odooUser || form.odoo_username;
+      const apiKey = odooKey || form.odoo_api_key;
+      if (!url || !database || !username || !apiKey) return;
       const wh = await api.post('/feeds/odoo-warehouses', {
-        url: form.odoo_url, database: form.odoo_database,
-        username: form.odoo_username, api_key: apiKey,
+        url, database, username, api_key: apiKey,
       }) as Array<{ id: number; name: string }>;
       setOdooWarehouses(wh);
     } catch { /* ignore */ }
@@ -267,7 +269,7 @@ export default function FeedsPage() {
                           setShowModal(true);
                           // Auto-fetch warehouses for Odoo feeds
                           if ((feed.type || 'google_sheets') === 'odoo' && feed.odoo_url && feed.odoo_database && feed.odoo_username && feed.odoo_api_key) {
-                            setTimeout(() => fetchWarehouses(feed.odoo_api_key), 100);
+                            fetchWarehouses(feed.odoo_url, feed.odoo_database, feed.odoo_username, feed.odoo_api_key);
                           }
                         }} title="Edit feed">
                           <Pencil size={12} />

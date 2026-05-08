@@ -449,6 +449,7 @@ async function turboSync(
     const locData = await shopifyGraphQL(channel, locQuery) as { locations: { edges: Array<{ node: { id: string } }> } };
     locationId = locData.locations.edges[0]?.node?.id;
   }
+  console.log(`[SyncFlow] Turbo: locationId=${locationId || 'NONE'}, products=${products.length}`);
 
   // Pre-compute metafield mappings
   const metafieldMappings = mappings.filter(m => m.target_field.startsWith('metafield:'));
@@ -549,7 +550,7 @@ async function syncProductTurbo(
             userErrors { field message }
           }
         }`;
-      await shopifyGraphQL(channel, stockQuery, {
+      const stockResult = await shopifyGraphQL(channel, stockQuery, {
         input: {
           name: "available",
           reason: "correction",
@@ -559,7 +560,13 @@ async function syncProductTurbo(
             quantity: stockQty,
           }],
         },
-      });
+      }) as { inventorySetQuantities?: { userErrors?: Array<{ field: string; message: string }> } };
+      const stockErrors = stockResult?.inventorySetQuantities?.userErrors;
+      if (stockErrors && stockErrors.length > 0) {
+        console.error(`[SyncFlow] Stock update failed for ${product.sku}: ${JSON.stringify(stockErrors)}`);
+      }
+    } else if (!locationId) {
+      console.warn(`[SyncFlow] No locationId for stock update of ${product.sku}`);
     }
 
     await logSyncEntry(jobId, product.sku, 'updated', 'Turbo sync succeeded');
@@ -751,6 +758,11 @@ async function syncGroupedProduct(
                 quantity: indivStockQty,
               }],
             },
+          }).then((r: unknown) => {
+            const res = r as { inventorySetQuantities?: { userErrors?: Array<{ field: string; message: string }> } };
+            if (res?.inventorySetQuantities?.userErrors?.length) {
+              console.error(`[SyncFlow] Stock update failed for ${product.sku}: ${JSON.stringify(res.inventorySetQuantities.userErrors)}`);
+            }
           }));
         }
 
