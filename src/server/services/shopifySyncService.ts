@@ -127,6 +127,34 @@ function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+// ── Delete all existing media from a product ───────────────────────────────
+async function deleteExistingProductMedia(channel: Channel, productId: string): Promise<void> {
+  // Fetch all media IDs for the product
+  const mediaQuery = `
+    query getProductMedia($id: ID!) {
+      product(id: $id) {
+        media(first: 250) {
+          edges { node { id } }
+        }
+      }
+    }`;
+  const mediaResult = await shopifyGraphQL(channel, mediaQuery, { id: productId }) as {
+    product?: { media?: { edges: Array<{ node: { id: string } }> } }
+  };
+  const mediaIds = mediaResult.product?.media?.edges?.map(e => e.node.id) || [];
+  if (mediaIds.length === 0) return;
+
+  // Delete all existing media
+  const deleteMutation = `
+    mutation productDeleteMedia($productId: ID!, $mediaIds: [ID!]!) {
+      productDeleteMedia(productId: $productId, mediaIds: $mediaIds) {
+        deletedMediaIds
+        mediaUserErrors { field message }
+      }
+    }`;
+  await shopifyGraphQL(channel, deleteMutation, { productId, mediaIds });
+}
+
 // ── SKU → Shopify ID lookup via GraphQL ────────────────────────────────────
 async function getShopifyProductMap(channel: Channel): Promise<Map<string, { productId: string; variantId: string; inventoryItemId: string }>> {
   const map = new Map();
@@ -493,6 +521,8 @@ async function syncGroupedProduct(
         if (withImages && mapped.image_url) {
           const urls = String(mapped.image_url).split(',').map(u => u.trim()).filter(Boolean);
           if (urls.length > 0) {
+            // Delete existing images first, then upload new ones
+            await deleteExistingProductMedia(channel, shopifyIds.productId);
             const mediaMutation = `
               mutation productCreateMedia($productId: ID!, $media: [CreateMediaInput!]!) {
                 productCreateMedia(productId: $productId, media: $media) {
@@ -815,6 +845,11 @@ async function syncVariantGroup(
   if (first.mapped.status) input.status = String(first.mapped.status).toUpperCase();
   if (metafields.length > 0) input.metafields = metafields;
   if (fileMap.size > 0) input.files = Array.from(fileMap.values());
+
+  // Delete existing images before uploading new ones (only for existing products with images)
+  if (existingProductId && withImages && fileMap.size > 0) {
+    await deleteExistingProductMedia(channel, existingProductId);
+  }
 
   const mutation = `
     mutation productSetSync($input: ProductSetInput!, $synchronous: Boolean!) {
