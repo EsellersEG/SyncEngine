@@ -127,6 +127,127 @@ function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function parseMappedWeight(mapped: Record<string, unknown>): { value: number; unit: string } | null {
+  if (mapped.weight === undefined || mapped.weight === null || mapped.weight === '') {
+    return null;
+  }
+
+  const value = parseFloat(String(mapped.weight));
+  if (Number.isNaN(value)) {
+    return null;
+  }
+
+  const unit = String(mapped.variant_weight_unit || 'GRAMS').toUpperCase();
+  const validUnits = ['GRAMS', 'KILOGRAMS', 'OUNCES', 'POUNDS'];
+  return {
+    value,
+    unit: validUnits.includes(unit) ? unit : 'GRAMS',
+  };
+}
+
+function isTruthyValue(value: unknown): boolean {
+  return ['true', '1', 'yes'].includes(String(value).toLowerCase());
+}
+
+async function updateInventoryItemDetails(
+  channel: Channel,
+  inventoryItemId: string,
+  mapped: Record<string, unknown>
+): Promise<void> {
+  const input: Record<string, unknown> = {};
+
+  if (mapped.inventory_quantity !== undefined) {
+    input.tracked = true;
+  }
+
+  const weight = parseMappedWeight(mapped);
+  if (weight) {
+    input.measurement = { weight };
+  }
+
+  if (Object.keys(input).length === 0) {
+    return;
+  }
+
+  const mutation = `
+    mutation inventoryItemUpdate($id: ID!, $input: InventoryItemInput!) {
+      inventoryItemUpdate(id: $id, input: $input) {
+        inventoryItem {
+          id
+          tracked
+          measurement {
+            weight {
+              value
+              unit
+            }
+          }
+        }
+        userErrors { field message }
+      }
+    }`;
+
+  const result = await shopifyGraphQL(channel, mutation, {
+    id: inventoryItemId,
+    input,
+  }) as {
+    inventoryItemUpdate: {
+      userErrors?: Array<{ field?: string[]; message: string }>;
+    };
+  };
+
+  if (result.inventoryItemUpdate.userErrors && result.inventoryItemUpdate.userErrors.length > 0) {
+    throw new Error(result.inventoryItemUpdate.userErrors.map(err => err.message).join('; '));
+  }
+}
+
+async function getVariantInventoryItemId(channel: Channel, variantId: string): Promise<string | null> {
+  const query = `
+    query getVariantInventoryItemId($variantId: ID!) {
+      productVariant(id: $variantId) {
+        inventoryItem { id }
+      }
+    }`;
+
+  const result = await shopifyGraphQL(channel, query, { variantId }) as {
+    productVariant?: { inventoryItem?: { id: string } };
+  };
+
+  return result.productVariant?.inventoryItem?.id || null;
+}
+
+async function getProductVariantInventoryMap(channel: Channel, productId: string): Promise<Map<string, string>> {
+  const query = `
+    query getProductVariantInventoryMap($id: ID!) {
+      product(id: $id) {
+        variants(first: 100) {
+          edges {
+            node {
+              sku
+              inventoryItem { id }
+            }
+          }
+        }
+      }
+    }`;
+
+  const result = await shopifyGraphQL(channel, query, { id: productId }) as {
+    product?: {
+      variants?: {
+        edges: Array<{ node: { sku: string; inventoryItem?: { id: string } } }>;
+      };
+    };
+  };
+
+  const inventoryMap = new Map<string, string>();
+  for (const edge of result.product?.variants?.edges || []) {
+    if (edge.node.sku && edge.node.inventoryItem?.id) {
+      inventoryMap.set(edge.node.sku, edge.node.inventoryItem.id);
+    }
+  }
+
+  return inventoryMap;
+}
+
 // ── Delete all existing media from a product ───────────────────────────────
 async function deleteExistingProductMedia(channel: Channel, productId: string): Promise<void> {
   // Fetch all media IDs for the product
@@ -326,6 +447,8 @@ async function syncProductTurbo(
       });
     }
 
+    await updateInventoryItemDetails(channel, shopifyIds.inventoryItemId, mapped);
+
     // 3. Stock update
     if (mapped.inventory_quantity !== undefined && locationId) {
       const stockQuery = `
@@ -454,9 +577,11 @@ async function syncGroupedProduct(
           }`;
         const input: Record<string, unknown> = { id: shopifyIds.productId };
         if (mapped.title) input.title = mapped.title;
+        if (mapped.handle) input.handle = normalizeHandle(mapped.handle);
         if (mapped.body_html) input.descriptionHtml = mapped.body_html;
         if (mapped.tags) input.tags = String(mapped.tags).split(',').map(t => t.trim());
         if (mapped.vendor) input.vendor = mapped.vendor;
+        if (mapped.product_type) input.productType = mapped.product_type;
         if (mapped.status) input.status = String(mapped.status).toUpperCase();
 
         if (metafieldMappings.length > 0) {
@@ -491,11 +616,27 @@ async function syncGroupedProduct(
           const variantInput: Record<string, unknown> = { id: shopifyIds.variantId };
           if (mapped.price) variantInput.price = String(mapped.price);
           if (mapped.compare_at_price) variantInput.compareAtPrice = String(mapped.compare_at_price);
+          if (mapped.barcode) variantInput.barcode = String(mapped.barcode);
+          if (mapped.variant_requires_shipping !== undefined) {
+            variantInput.requiresShipping = isTruthyValue(mapped.variant_requires_shipping);
+          }
+          if (mapped.variant_inventory_policy) {
+            variantInput.inventoryPolicy = String(mapped.variant_inventory_policy).toUpperCase();
+          }
+          if (mapped.variant_fulfillment_service && String(mapped.variant_fulfillment_service).startsWith('gid://shopify/FulfillmentService/')) {
+            variantInput.fulfillmentServiceId = String(mapped.variant_fulfillment_service);
+          }
           updatePromises.push(shopifyGraphQL(channel, variantMutation, {
             productId: shopifyIds.productId,
             variants: [variantInput],
           }));
         }
+
+        if (mapped.published !== undefined) {
+          updatePromises.push(setProductPublicationStatus(channel, shopifyIds.productId, mapped.published));
+        }
+
+        updatePromises.push(updateInventoryItemDetails(channel, shopifyIds.inventoryItemId, mapped));
 
         if (mapped.inventory_quantity !== undefined && locationId) {
           const stockQuery = `
@@ -518,8 +659,9 @@ async function syncGroupedProduct(
           }));
         }
 
-        if (withImages && mapped.image_url) {
-          const urls = String(mapped.image_url).split(',').map(u => u.trim()).filter(Boolean);
+        const updateImageSource = mapped.variant_image || mapped.image_url;
+        if (withImages && updateImageSource) {
+          const urls = String(updateImageSource).split(',').map(u => u.trim()).filter(Boolean);
           if (urls.length > 0) {
             // Delete existing images first, then upload new ones
             await deleteExistingProductMedia(channel, shopifyIds.productId);
@@ -553,7 +695,7 @@ async function createShopifyProduct(channel: Channel, sku: string, mapped: Recor
   const createMutation = `
     mutation productCreate($product: ProductCreateInput!, $media: [CreateMediaInput!]) {
       productCreate(product: $product, media: $media) {
-        product { id variants(first: 1) { edges { node { id } } } }
+        product { id variants(first: 1) { edges { node { id inventoryItem { id } } } } }
         userErrors { field message }
       }
     }`;
@@ -565,6 +707,9 @@ async function createShopifyProduct(channel: Channel, sku: string, mapped: Recor
     tags: mapped.tags ? String(mapped.tags).split(',').map(t => t.trim()) : [],
     status: mapped.status ? String(mapped.status).toUpperCase() : 'DRAFT',
   };
+
+  if (mapped.handle) product.handle = normalizeHandle(mapped.handle);
+  if (mapped.product_type) product.productType = mapped.product_type;
 
   // Add metafields to create input
   if (mappings && rawData) {
@@ -587,8 +732,9 @@ async function createShopifyProduct(channel: Channel, sku: string, mapped: Recor
 
   // Media (images) — handles comma-separated URLs
   const media: Array<{ originalSource: string; mediaContentType: string }> = [];
-  if (withImages && mapped.image_url) {
-    const urls = String(mapped.image_url).split(',').map(u => u.trim()).filter(Boolean);
+  const createImageSource = mapped.variant_image || mapped.image_url;
+  if (withImages && createImageSource) {
+    const urls = String(createImageSource).split(',').map(u => u.trim()).filter(Boolean);
     for (const url of urls) {
       media.push({ originalSource: url, mediaContentType: 'IMAGE' });
     }
@@ -597,7 +743,7 @@ async function createShopifyProduct(channel: Channel, sku: string, mapped: Recor
   const result = await shopifyGraphQL(channel, createMutation, {
     product,
     media: media.length > 0 ? media : undefined,
-  }) as { productCreate: { product: { id: string; variants: { edges: Array<{ node: { id: string } }> } }; userErrors: Array<{ field: string; message: string }> } };
+  }) as { productCreate: { product: { id: string; variants: { edges: Array<{ node: { id: string; inventoryItem?: { id: string } } }> } }; userErrors: Array<{ field: string; message: string }> } };
 
   if (result.productCreate.userErrors?.length > 0) {
     throw new Error(JSON.stringify(result.productCreate.userErrors));
@@ -605,6 +751,7 @@ async function createShopifyProduct(channel: Channel, sku: string, mapped: Recor
 
   const productId = result.productCreate.product?.id;
   const variantId = result.productCreate.product?.variants?.edges?.[0]?.node?.id;
+  let inventoryItemId = result.productCreate.product?.variants?.edges?.[0]?.node?.inventoryItem?.id || null;
 
   // Update default variant with SKU + price
   if (variantId && productId) {
@@ -615,34 +762,48 @@ async function createShopifyProduct(channel: Channel, sku: string, mapped: Recor
           userErrors { field message }
         }
       }`;
-    const inventoryItem: Record<string, unknown> = { sku, tracked: mapped.inventory_quantity !== undefined };
-    if (mapped.weight !== undefined && mapped.weight !== '' && mapped.weight !== null) {
-      const weightVal = parseFloat(String(mapped.weight));
-      if (!isNaN(weightVal)) {
-        const unit = String(mapped.variant_weight_unit || 'GRAMS').toUpperCase();
-        const validUnits = ['GRAMS', 'KILOGRAMS', 'OUNCES', 'POUNDS'];
-        inventoryItem.measurement = {
-          weight: { value: weightVal, unit: validUnits.includes(unit) ? unit : 'GRAMS' },
-        };
-      }
+    const variantInput: Record<string, unknown> = {
+      id: variantId,
+      price: mapped.price ? String(mapped.price) : '0.00',
+      compareAtPrice: mapped.compare_at_price ? String(mapped.compare_at_price) : null,
+      inventoryItem: { sku },
+    };
+    if (mapped.barcode) variantInput.barcode = String(mapped.barcode);
+    if (mapped.variant_requires_shipping !== undefined) {
+      variantInput.requiresShipping = isTruthyValue(mapped.variant_requires_shipping);
+    }
+    if (mapped.variant_inventory_policy) {
+      variantInput.inventoryPolicy = String(mapped.variant_inventory_policy).toUpperCase();
+    }
+    if (mapped.variant_fulfillment_service && String(mapped.variant_fulfillment_service).startsWith('gid://shopify/FulfillmentService/')) {
+      variantInput.fulfillmentServiceId = String(mapped.variant_fulfillment_service);
     }
     await shopifyGraphQL(channel, variantMutation, {
       productId,
-      variants: [{
-        id: variantId,
-        price: mapped.price ? String(mapped.price) : '0.00',
-        compareAtPrice: mapped.compare_at_price ? String(mapped.compare_at_price) : null,
-        inventoryItem,
-      }],
+      variants: [variantInput],
     });
+
+    if (!inventoryItemId) {
+      inventoryItemId = await getVariantInventoryItemId(channel, variantId);
+    }
+    if (inventoryItemId) {
+      await updateInventoryItemDetails(channel, inventoryItemId, mapped);
+    }
   }
 
   // Publish product to all sales channels
   if (productId) {
-    await publishToSalesChannels(channel, productId);
+    if (mapped.published !== undefined) {
+      await setProductPublicationStatus(channel, productId, mapped.published);
+    } else {
+      await publishToSalesChannels(channel, productId);
+    }
   }
 }
 
+          if (mapped.variant_fulfillment_service && String(mapped.variant_fulfillment_service).startsWith('gid://shopify/FulfillmentService/')) {
+            variantInput.fulfillmentServiceId = String(mapped.variant_fulfillment_service);
+          }
 // ── Publish product to all sales channels ──────────────────────────────────
 async function publishToSalesChannels(channel: Channel, productId: string) {
   try {
@@ -665,6 +826,45 @@ async function publishToSalesChannels(channel: Channel, productId: string) {
     }
   } catch (pubErr) {
     console.warn(`[Sync] Could not publish product ${productId}:`, pubErr);
+  }
+}
+
+async function setProductPublicationStatus(channel: Channel, productId: string, published: unknown) {
+  try {
+    const pubQuery = `{ publications(first: 20) { edges { node { id } } } }`;
+    const pubData = await shopifyGraphQL(channel, pubQuery) as { publications: { edges: Array<{ node: { id: string } }> } };
+    const publicationIds = pubData.publications?.edges?.map(e => e.node.id) || [];
+
+    if (publicationIds.length === 0) {
+      return;
+    }
+
+    if (isTruthyValue(published)) {
+      const publishMutation = `
+        mutation publishablePublish($id: ID!, $input: [PublicationInput!]!) {
+          publishablePublish(id: $id, input: $input) {
+            userErrors { field message }
+          }
+        }`;
+      await shopifyGraphQL(channel, publishMutation, {
+        id: productId,
+        input: publicationIds.map(publicationId => ({ publicationId })),
+      });
+      return;
+    }
+
+    const unpublishMutation = `
+      mutation publishableUnpublish($id: ID!, $input: [PublicationInput!]!) {
+        publishableUnpublish(id: $id, input: $input) {
+          userErrors { field message }
+        }
+      }`;
+    await shopifyGraphQL(channel, unpublishMutation, {
+      id: productId,
+      input: publicationIds.map(publicationId => ({ publicationId })),
+    });
+  } catch (pubErr) {
+    console.warn(`[Sync] Could not update publication status for ${productId}:`, pubErr);
   }
 }
 
@@ -801,7 +1001,16 @@ async function syncVariantGroup(
         variant.compareAtPrice = String(entry.mapped.compare_at_price);
       }
       if (entry.mapped.barcode) variant.barcode = String(entry.mapped.barcode);
-      if (entry.mapped.taxable !== undefined) variant.taxable = ['true', '1', 'yes'].includes(String(entry.mapped.taxable).toLowerCase());
+      if (entry.mapped.taxable !== undefined) variant.taxable = isTruthyValue(entry.mapped.taxable);
+      if (entry.mapped.variant_requires_shipping !== undefined) {
+        variant.requiresShipping = isTruthyValue(entry.mapped.variant_requires_shipping);
+      }
+      if (entry.mapped.variant_inventory_policy) {
+        variant.inventoryPolicy = String(entry.mapped.variant_inventory_policy).toUpperCase();
+      }
+      if (entry.mapped.variant_fulfillment_service && String(entry.mapped.variant_fulfillment_service).startsWith('gid://shopify/FulfillmentService/')) {
+        variant.fulfillmentServiceId = String(entry.mapped.variant_fulfillment_service);
+      }
 
       // Inventory tracking + quantity
       const hasInventory = entry.mapped.inventory_quantity !== undefined;
@@ -813,22 +1022,8 @@ async function syncVariantGroup(
         }];
       }
 
-      // Build inventoryItem (tracked + weight)
-      const inventoryItem: Record<string, unknown> = {};
-      if (hasInventory) inventoryItem.tracked = true;
-      if (entry.mapped.weight !== undefined && entry.mapped.weight !== '' && entry.mapped.weight !== null) {
-        const weightVal = parseFloat(String(entry.mapped.weight));
-        if (!isNaN(weightVal)) {
-          const unit = String(entry.mapped.variant_weight_unit || 'GRAMS').toUpperCase();
-          const validUnits = ['GRAMS', 'KILOGRAMS', 'OUNCES', 'POUNDS'];
-          inventoryItem.measurement = {
-            weight: { value: weightVal, unit: validUnits.includes(unit) ? unit : 'GRAMS' },
-          };
-        }
-      }
-      if (Object.keys(inventoryItem).length > 0) variant.inventoryItem = inventoryItem;
-
-      const variantImage = withImages ? String(entry.mapped.image_url || '').split(',').map(url => url.trim()).find(Boolean) : null;
+      const variantImageSource = entry.mapped.variant_image || entry.mapped.image_url;
+      const variantImage = withImages ? String(variantImageSource || '').split(',').map(url => url.trim()).find(Boolean) : null;
       if (variantImage) {
         variant.file = { originalSource: variantImage, contentType: 'IMAGE' };
       }
@@ -868,10 +1063,25 @@ async function syncVariantGroup(
     throw new Error(result.productSet.userErrors.map(err => err.message).join('; '));
   }
 
+  const syncedProductId = result.productSet.product?.id || existingProductId;
+  if (syncedProductId) {
+    const inventoryMap = await getProductVariantInventoryMap(channel, syncedProductId);
+    for (const entry of mappedRows) {
+      const inventoryItemId = inventoryMap.get(entry.row.sku);
+      if (inventoryItemId) {
+        await updateInventoryItemDetails(channel, inventoryItemId, entry.mapped);
+      }
+    }
+  }
+
   // Publish product to all sales channels
   const createdProductId = result.productSet.product?.id;
   if (createdProductId) {
-    await publishToSalesChannels(channel, createdProductId);
+    if (first.mapped.published !== undefined) {
+      await setProductPublicationStatus(channel, createdProductId, first.mapped.published);
+    } else {
+      await publishToSalesChannels(channel, createdProductId);
+    }
   }
 
   if (existingProductId && distinctProductIds.size > 1) {
@@ -939,6 +1149,8 @@ function inferVariantOptionFromRows(rows: ProductRow[]): { name: string; valuesB
     const distinctValues = Array.from(new Set(Object.values(valuesBySku)));
     if (distinctValues.length > 1) {
       return { name: matchingHeader, valuesBySku };
+        if (mapped.handle) input.handle = normalizeHandle(mapped.handle);
+        if (mapped.product_type) input.productType = mapped.product_type;
     }
   }
 
