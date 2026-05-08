@@ -191,8 +191,8 @@ async function syncOrderToOdoo(channel: ChannelInfo, shopifyOrderId: string, ord
     });
 
     await query(
-      "UPDATE orders SET status = 'synced', odoo_order_id = $1, synced_at = NOW() WHERE channel_id = $2 AND shopify_order_id = $3",
-      [result.odooOrderId, channel.id, shopifyOrderId]
+      "UPDATE orders SET status = 'synced', odoo_order_id = $1, odoo_order_name = $2, synced_at = NOW() WHERE channel_id = $3 AND shopify_order_id = $4",
+      [result.odooOrderId, result.odooOrderName, channel.id, shopifyOrderId]
     );
     console.log(`[Webhook] Order synced to Odoo: ${result.odooOrderName}`);
   } catch (err) {

@@ -27,6 +27,24 @@ router.get('/', async (req: AuthRequest, res) => {
   }
 });
 
+// GET /api/orders/:id — single order with full raw_data
+router.get('/:id', async (req: AuthRequest, res) => {
+  try {
+    const result = await query(
+      `SELECT o.*, ch.name as channel_name, ch.shopify_store_url
+       FROM orders o
+       LEFT JOIN channels ch ON o.channel_id = ch.id
+       WHERE o.id = $1`,
+      [req.params.id]
+    );
+    if (!result.rows[0]) return res.status(404).json({ error: 'Order not found' });
+    return res.json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to fetch order' });
+  }
+});
+
 // POST /api/orders/:id/retry — retry failed order sync to Odoo
 router.post('/:id/retry', async (req: AuthRequest, res) => {
   try {
@@ -111,8 +129,8 @@ router.post('/:id/retry', async (req: AuthRequest, res) => {
     });
 
     await query(
-      "UPDATE orders SET status = 'synced', odoo_order_id = $1, synced_at = NOW(), error_message = NULL WHERE id = $2",
-      [result.odooOrderId, req.params.id]
+      "UPDATE orders SET status = 'synced', odoo_order_id = $1, odoo_order_name = $2, synced_at = NOW(), error_message = NULL WHERE id = $3",
+      [result.odooOrderId, result.odooOrderName, req.params.id]
     );
 
     return res.json({ success: true, odooOrderId: result.odooOrderId, odooOrderName: result.odooOrderName });

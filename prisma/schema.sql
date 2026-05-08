@@ -162,6 +162,7 @@ CREATE TABLE orders (
   shopify_order_id TEXT NOT NULL,
   shopify_order_number TEXT,
   odoo_order_id INT,
+  odoo_order_name VARCHAR(100),
   status VARCHAR(50) DEFAULT 'pending', -- 'pending', 'synced', 'failed'
   total_price DECIMAL(10,2),
   customer_email VARCHAR(255),
