@@ -51,18 +51,62 @@ router.post('/:id/retry', async (req: AuthRequest, res) => {
       productSearchBy: odooFeed.odoo_search_by || 'automatic',
     };
 
+    // Get channel for Shopify API access (needed for EAN barcode lookup)
+    const channelResult = await query(
+      'SELECT shopify_store_url, shopify_access_token, shopify_api_version FROM channels WHERE id = $1',
+      [order.channel_id]
+    );
+    const channel = channelResult.rows[0];
+
     const rawData = order.raw_data;
+    const lineItems = rawData.line_items || [];
+
+    // If EAN mode, fetch barcodes from Shopify
+    let barcodeMap = new Map<string, string>();
+    if (config.productSearchBy === 'ean' && channel) {
+      const variantIds = lineItems
+        .map((li: Record<string, unknown>) => String(li.variant_id || ''))
+        .filter(Boolean);
+      if (variantIds.length > 0) {
+        const gids = variantIds.map((id: string) => `gid://shopify/ProductVariant/${id}`);
+        const gqlQuery = `query getVariants($ids: [ID!]!) { nodes(ids: $ids) { ... on ProductVariant { id barcode } } }`;
+        const storeDomain = channel.shopify_store_url.replace(/^https?:\/\//, '').replace(/\/$/, '');
+        const url = `https://${storeDomain}/admin/api/${channel.shopify_api_version}/graphql.json`;
+        try {
+          const gqlRes = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': channel.shopify_access_token },
+            body: JSON.stringify({ query: gqlQuery, variables: { ids: gids } }),
+          });
+          const json = await gqlRes.json() as { data?: { nodes: Array<{ id: string; barcode: string | null }> } };
+          if (json.data?.nodes) {
+            for (const node of json.data.nodes) {
+              if (node?.barcode) {
+                barcodeMap.set(node.id.replace('gid://shopify/ProductVariant/', ''), node.barcode);
+              }
+            }
+          }
+        } catch (e) { console.error('[Orders] Failed to fetch barcodes:', e); }
+      }
+    }
+
     const result = await createOdooSaleOrder(config, {
       email: String(rawData.email || ''),
       name: String(rawData.name || rawData.order_number || ''),
       total_price: String(rawData.total_price || '0'),
-      line_items: (rawData.line_items || []).map((li: Record<string, unknown>) => ({
-        sku: String(li.sku || ''),
-        name: String(li.name || ''),
-        quantity: Number(li.quantity) || 1,
-        price: String(li.price || '0'),
-        discount_allocations: li.discount_allocations as Array<{ amount: string }> | undefined,
-      })),
+      line_items: lineItems.map((li: Record<string, unknown>) => {
+        const variantId = String(li.variant_id || '');
+        const lookupKey = (config.productSearchBy === 'ean' && barcodeMap.get(variantId))
+          ? barcodeMap.get(variantId)!
+          : String(li.sku || '');
+        return {
+          sku: lookupKey,
+          name: String(li.name || ''),
+          quantity: Number(li.quantity) || 1,
+          price: String(li.price || '0'),
+          discount_allocations: li.discount_allocations as Array<{ amount: string }> | undefined,
+        };
+      }),
       shipping_address: rawData.shipping_address,
     });
 

@@ -88,25 +88,102 @@ router.post('/shopify/orders', async (req: Request, res: Response) => {
       apiKey: odooFeed.odoo_api_key,
       productSearchBy: odooFeed.odoo_search_by || 'automatic',
     };
-    await syncOrderToOdoo(channel.id, shopifyOrderId, order, config);
+    await syncOrderToOdoo(channel, shopifyOrderId, order, config);
   } catch (err) {
     console.error('[Webhook] Error processing order:', err);
   }
 });
 
-async function syncOrderToOdoo(channelId: string, shopifyOrderId: string, order: Record<string, unknown>, config: OdooConfig) {
+// Fetch variant barcodes from Shopify when EAN matching is needed
+async function getShopifyVariantBarcodes(
+  channel: { shopify_store_url: string; shopify_access_token: string; shopify_api_version: string },
+  variantIds: string[]
+): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  if (variantIds.length === 0) return map;
+
+  // Query Shopify for variant barcodes
+  const gqlQuery = `
+    query getVariants($ids: [ID!]!) {
+      nodes(ids: $ids) {
+        ... on ProductVariant {
+          id
+          barcode
+        }
+      }
+    }`;
+
+  const gids = variantIds.map(id => `gid://shopify/ProductVariant/${id}`);
+  const storeDomain = channel.shopify_store_url.replace(/^https?:\/\//, '').replace(/\/$/, '');
+  const url = `https://${storeDomain}/admin/api/${channel.shopify_api_version}/graphql.json`;
+
   try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Shopify-Access-Token': channel.shopify_access_token,
+      },
+      body: JSON.stringify({ query: gqlQuery, variables: { ids: gids } }),
+    });
+    const json = await res.json() as { data?: { nodes: Array<{ id: string; barcode: string | null }> } };
+    if (json.data?.nodes) {
+      for (const node of json.data.nodes) {
+        if (node?.barcode) {
+          // Extract numeric variant ID from GID
+          const numericId = node.id.replace('gid://shopify/ProductVariant/', '');
+          map.set(numericId, node.barcode);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[Webhook] Failed to fetch variant barcodes from Shopify:', err);
+  }
+
+  return map;
+}
+
+interface ChannelInfo {
+  id: string;
+  shopify_store_url: string;
+  shopify_access_token: string;
+  shopify_api_version: string;
+  client_id: string;
+  settings?: Record<string, unknown>;
+}
+
+async function syncOrderToOdoo(channel: ChannelInfo, shopifyOrderId: string, order: Record<string, unknown>, config: OdooConfig) {
+  try {
+    const lineItems = (order.line_items as Array<Record<string, unknown>>) || [];
+
+    // If EAN mode, fetch barcodes from Shopify to use as the lookup key
+    let barcodeMap = new Map<string, string>();
+    if (config.productSearchBy === 'ean') {
+      const variantIds = lineItems
+        .map(li => String(li.variant_id || ''))
+        .filter(Boolean);
+      barcodeMap = await getShopifyVariantBarcodes(channel, variantIds);
+      console.log(`[Webhook] EAN mode: fetched ${barcodeMap.size} barcodes from Shopify`);
+    }
+
     const result = await createOdooSaleOrder(config, {
       email: String(order.email || ''),
       name: String(order.name || order.order_number || ''),
       total_price: String(order.total_price || '0'),
-      line_items: ((order.line_items as Array<Record<string, unknown>>) || []).map(li => ({
-        sku: String(li.sku || ''),
-        name: String(li.name || ''),
-        quantity: Number(li.quantity) || 1,
-        price: String(li.price || '0'),
-        discount_allocations: li.discount_allocations as Array<{ amount: string }> | undefined,
-      })),
+      line_items: lineItems.map(li => {
+        const variantId = String(li.variant_id || '');
+        // Use barcode as the lookup key in EAN mode, otherwise use SKU
+        const lookupKey = (config.productSearchBy === 'ean' && barcodeMap.get(variantId))
+          ? barcodeMap.get(variantId)!
+          : String(li.sku || '');
+        return {
+          sku: lookupKey,
+          name: String(li.name || ''),
+          quantity: Number(li.quantity) || 1,
+          price: String(li.price || '0'),
+          discount_allocations: li.discount_allocations as Array<{ amount: string }> | undefined,
+        };
+      }),
       shipping_address: order.shipping_address as {
         first_name?: string; last_name?: string; address1?: string;
         address2?: string; city?: string; zip?: string; country?: string; phone?: string;
@@ -115,13 +192,13 @@ async function syncOrderToOdoo(channelId: string, shopifyOrderId: string, order:
 
     await query(
       "UPDATE orders SET status = 'synced', odoo_order_id = $1, synced_at = NOW() WHERE channel_id = $2 AND shopify_order_id = $3",
-      [result.odooOrderId, channelId, shopifyOrderId]
+      [result.odooOrderId, channel.id, shopifyOrderId]
     );
     console.log(`[Webhook] Order synced to Odoo: ${result.odooOrderName}`);
   } catch (err) {
     await query(
       "UPDATE orders SET status = 'failed', error_message = $1 WHERE channel_id = $2 AND shopify_order_id = $3",
-      [String(err), channelId, shopifyOrderId]
+      [String(err), channel.id, shopifyOrderId]
     );
     console.error(`[Webhook] Failed to sync order to Odoo:`, err);
   }

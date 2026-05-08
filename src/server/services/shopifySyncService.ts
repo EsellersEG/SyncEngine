@@ -585,13 +585,24 @@ async function createShopifyProduct(channel: Channel, sku: string, mapped: Recor
           userErrors { field message }
         }
       }`;
+    const inventoryItem: Record<string, unknown> = { sku, tracked: mapped.inventory_quantity !== undefined };
+    if (mapped.weight !== undefined && mapped.weight !== '' && mapped.weight !== null) {
+      const weightVal = parseFloat(String(mapped.weight));
+      if (!isNaN(weightVal)) {
+        const unit = String(mapped.variant_weight_unit || 'GRAMS').toUpperCase();
+        const validUnits = ['GRAMS', 'KILOGRAMS', 'OUNCES', 'POUNDS'];
+        inventoryItem.measurement = {
+          weight: { value: weightVal, unit: validUnits.includes(unit) ? unit : 'GRAMS' },
+        };
+      }
+    }
     await shopifyGraphQL(channel, variantMutation, {
       productId,
       variants: [{
         id: variantId,
         price: mapped.price ? String(mapped.price) : '0.00',
         compareAtPrice: mapped.compare_at_price ? String(mapped.compare_at_price) : null,
-        inventoryItem: { sku },
+        inventoryItem,
       }],
     });
   }
@@ -761,13 +772,31 @@ async function syncVariantGroup(
       }
       if (entry.mapped.barcode) variant.barcode = String(entry.mapped.barcode);
       if (entry.mapped.taxable !== undefined) variant.taxable = ['true', '1', 'yes'].includes(String(entry.mapped.taxable).toLowerCase());
-      if (entry.mapped.inventory_quantity !== undefined && locationId) {
+
+      // Inventory tracking + quantity
+      const hasInventory = entry.mapped.inventory_quantity !== undefined;
+      if (hasInventory && locationId) {
         variant.inventoryQuantities = [{
           locationId,
           name: 'available',
           quantity: parseInt(String(entry.mapped.inventory_quantity)),
         }];
       }
+
+      // Build inventoryItem (tracked + weight)
+      const inventoryItem: Record<string, unknown> = {};
+      if (hasInventory) inventoryItem.tracked = true;
+      if (entry.mapped.weight !== undefined && entry.mapped.weight !== '' && entry.mapped.weight !== null) {
+        const weightVal = parseFloat(String(entry.mapped.weight));
+        if (!isNaN(weightVal)) {
+          const unit = String(entry.mapped.variant_weight_unit || 'GRAMS').toUpperCase();
+          const validUnits = ['GRAMS', 'KILOGRAMS', 'OUNCES', 'POUNDS'];
+          inventoryItem.measurement = {
+            weight: { value: weightVal, unit: validUnits.includes(unit) ? unit : 'GRAMS' },
+          };
+        }
+      }
+      if (Object.keys(inventoryItem).length > 0) variant.inventoryItem = inventoryItem;
 
       const variantImage = withImages ? String(entry.mapped.image_url || '').split(',').map(url => url.trim()).find(Boolean) : null;
       if (variantImage) {
