@@ -554,6 +554,7 @@ async function syncProductTurbo(
         input: {
           name: "available",
           reason: "correction",
+          ignoreCompareQuantity: true,
           quantities: [{
             inventoryItemId: shopifyIds.inventoryItemId,
             locationId,
@@ -752,6 +753,7 @@ async function syncGroupedProduct(
             input: {
               name: "available",
               reason: "correction",
+              ignoreCompareQuantity: true,
               quantities: [{
                 inventoryItemId: shopifyIds.inventoryItemId,
                 locationId,
