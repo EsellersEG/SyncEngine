@@ -313,7 +313,7 @@ export async function fetchOdooProducts(config: OdooConfig): Promise<{ headers: 
     row['barcode'] = p.barcode ? String(p.barcode) : null;
     row['name'] = p.name ? String(p.name) : null;
     row['list_price'] = typeof p.list_price === 'number' ? p.list_price : null;
-    row['qty_available'] = typeof p.qty_available === 'number' ? p.qty_available : null;
+    row['qty_available'] = typeof p.qty_available === 'number' ? p.qty_available : (p.qty_available === false ? 0 : null);
     row['default_code'] = p.default_code ? String(p.default_code) : null;
     row['weight'] = typeof p.weight === 'number' ? p.weight : null;
     row['description_sale'] = p.description_sale ? String(p.description_sale) : null;

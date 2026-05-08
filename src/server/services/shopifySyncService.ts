@@ -538,7 +538,10 @@ async function syncProductTurbo(
     await updateInventoryItemDetails(channel, shopifyIds.inventoryItemId, mapped);
 
     // 3. Stock update
-    if (mapped.inventory_quantity !== undefined && locationId) {
+    const stockQty = mapped.inventory_quantity !== undefined && mapped.inventory_quantity !== null
+      ? parseInt(String(mapped.inventory_quantity))
+      : NaN;
+    if (!isNaN(stockQty) && locationId) {
       const stockQuery = `
         mutation inventorySetQuantities($input: InventorySetQuantitiesInput!) {
           inventorySetQuantities(input: $input) {
@@ -553,7 +556,7 @@ async function syncProductTurbo(
           quantities: [{
             inventoryItemId: shopifyIds.inventoryItemId,
             locationId,
-            quantity: parseInt(String(mapped.inventory_quantity)),
+            quantity: stockQty,
           }],
         },
       });
@@ -727,7 +730,10 @@ async function syncGroupedProduct(
 
         updatePromises.push(updateInventoryItemDetails(channel, shopifyIds.inventoryItemId, mapped));
 
-        if (mapped.inventory_quantity !== undefined && locationId) {
+        const indivStockQty = mapped.inventory_quantity !== undefined && mapped.inventory_quantity !== null
+          ? parseInt(String(mapped.inventory_quantity))
+          : NaN;
+        if (!isNaN(indivStockQty) && locationId) {
           const stockQuery = `
             mutation inventorySetQuantities($input: InventorySetQuantitiesInput!) {
               inventorySetQuantities(input: $input) {
@@ -742,7 +748,7 @@ async function syncGroupedProduct(
               quantities: [{
                 inventoryItemId: shopifyIds.inventoryItemId,
                 locationId,
-                quantity: parseInt(String(mapped.inventory_quantity)),
+                quantity: indivStockQty,
               }],
             },
           }));
