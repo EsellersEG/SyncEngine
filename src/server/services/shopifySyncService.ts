@@ -445,7 +445,8 @@ async function turboSync(
   mappings: AttributeMapping[],
   jobId: string,
   priceAdjustmentPercent = 0,
-  priceRoundingMode: 'none' | 'up' | 'down' = 'none'
+  priceRoundingMode: 'none' | 'up' | 'down' = 'none',
+  warehouseName?: string
 ) {
   const shopifyMap = products.length <= 50
     ? await getShopifyProductMapForSKUs(channel, products.map(p => p.sku))
