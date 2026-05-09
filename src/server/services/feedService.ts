@@ -274,6 +274,11 @@ async function triggerAutoSync(feed: FeedRecord, changedSkus: string[]) {
     [feed.id, 'after_import', 'sync_to_shopify']
   );
 
+  if (changedSkus.length === 0) {
+    console.log('[FeedService] Import completed with no changed SKUs; after_import automations marked as run but no Shopify sync job created');
+    return;
+  }
+
   for (const automation of automationsResult.rows) {
     const channelId = automation.ch_id;
     const channelName = automation.ch_name;
@@ -289,23 +294,34 @@ async function triggerAutoSync(feed: FeedRecord, changedSkus: string[]) {
       continue;
     }
 
-    // Count total products in this feed for the job record
-    const countResult = await query(
-      "SELECT COUNT(*) as cnt FROM products WHERE feed_id = $1 AND status = 'active'",
-      [feed.id]
-    );
-    const totalProducts = parseInt(countResult.rows[0]?.cnt || '0');
-
-    // Always sync ALL products — stock/price changes in Odoo don't change feed fingerprints
+    // Create a sync job for the changed SKUs only
     const jobResult = await query(
       `INSERT INTO sync_jobs (channel_id, feed_id, preset, total_products, status, client_id)
        VALUES ($1, $2, $3, $4, 'pending', $5)
        RETURNING id`,
-      [channelId, feed.id, preset, totalProducts, feed.client_id]
+      [channelId, feed.id, preset, changedSkus.length, feed.client_id]
     );
     const jobId = jobResult.rows[0].id;
 
-    console.log(`[FeedService] Auto-sync triggered → Job ${jobId} for channel ${channelName} (all ${totalProducts} products, ${changedSkus.length} changed in feed)`);
+    console.log(`[FeedService] Auto-sync triggered → Job ${jobId} for channel ${channelName} (${changedSkus.length} changed products)`);
+    runSyncJob({
+      jobId,
+      channel: {
+        id: channelId,
+        shopify_store_url: automation.shopify_store_url,
+        shopify_access_token: automation.shopify_access_token,
+        shopify_api_version: automation.shopify_api_version,
+        settings: automation.settings,
+      },
+      feedId: feed.id,
+      preset,
+      skus: changedSkus,
+      priceAdjustmentPercent: Number(automation.price_adjustment_percent || 0),
+      priceRoundingMode: automation.rounding_mode === 'up' || automation.rounding_mode === 'down' ? automation.rounding_mode : 'none',
+    }).catch(err => {
+      console.error(`[FeedService] Auto-sync job ${jobId} failed:`, err);
+    });
+  }
     // Run async — no skus filter so ALL products get synced
     runSyncJob({
       jobId,

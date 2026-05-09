@@ -93,6 +93,16 @@ async function init() {
       `ALTER TABLE orders ADD COLUMN IF NOT EXISTS odoo_order_name VARCHAR(100)`,
       `ALTER TABLE feeds ADD COLUMN IF NOT EXISTS odoo_warehouse_id INT`,
       `ALTER TABLE feeds ADD COLUMN IF NOT EXISTS odoo_warehouse_name TEXT`,
+      `CREATE TABLE IF NOT EXISTS user_feeds (
+        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+        feed_id UUID REFERENCES feeds(id) ON DELETE CASCADE,
+        PRIMARY KEY (user_id, feed_id)
+      )`,
+      `CREATE TABLE IF NOT EXISTS user_channels (
+        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+        channel_id UUID REFERENCES channels(id) ON DELETE CASCADE,
+        PRIMARY KEY (user_id, channel_id)
+      )`,
     ];
     for (const sql of migrations) {
       await client.query(sql);
