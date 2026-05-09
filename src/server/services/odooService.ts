@@ -486,3 +486,27 @@ function getOdooProductSearchFields(mode: OdooConfig['productSearchBy']): string
       return ['barcode', 'default_code', 'name'];
   }
 }
+
+// ── Order Cancellation ─────────────────────────────────────────────────────
+
+/** Cancel a confirmed sale order in Odoo (moves it to 'cancel' state). */
+export async function cancelOdooSaleOrder(config: OdooConfig, odooOrderId: number): Promise<void> {
+  const uid = await odooAuthenticate(config);
+  await odooExecute(config, uid, 'sale.order', 'action_cancel', [[odooOrderId]]);
+}
+
+/** Return the state of a sale order ('draft', 'sale', 'done', 'cancel', etc.). */
+export async function getOdooOrderState(config: OdooConfig, odooOrderId: number): Promise<string> {
+  const uid = await odooAuthenticate(config);
+  const result = await odooExecute(config, uid, 'sale.order', 'read', [[odooOrderId]], { fields: ['state'] }) as Array<{ state: string }>;
+  return result[0]?.state || '';
+}
+
+/** Read multiple sale orders' states in one call. Returns a map of odooOrderId → state. */
+export async function getOdooOrderStates(config: OdooConfig, odooOrderIds: number[]): Promise<Map<number, string>> {
+  const uid = await odooAuthenticate(config);
+  const results = await odooExecute(config, uid, 'sale.order', 'read', [odooOrderIds], { fields: ['id', 'state'] }) as Array<{ id: number; state: string }>;
+  const map = new Map<number, string>();
+  for (const r of results) map.set(r.id, r.state);
+  return map;
+}

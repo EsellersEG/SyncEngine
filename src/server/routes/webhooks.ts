@@ -7,7 +7,7 @@
 import { Router, type Request, type Response } from 'express';
 import crypto from 'crypto';
 import { query } from '../db.js';
-import { createOdooSaleOrder, type OdooConfig } from '../services/odooService.js';
+import { createOdooSaleOrder, cancelOdooSaleOrder, type OdooConfig } from '../services/odooService.js';
 
 const router = Router();
 
@@ -200,5 +200,80 @@ async function syncOrderToOdoo(channel: ChannelInfo, shopifyOrderId: string, ord
     console.error(`[Webhook] Failed to sync order to Odoo:`, err);
   }
 }
+
+// POST /webhooks/shopify/orders/cancelled — Shopify order cancelled webhook
+router.post('/shopify/orders/cancelled', async (req: Request, res: Response) => {
+  const hmac = req.headers['x-shopify-hmac-sha256'] as string;
+  const shopDomain = (req.headers['x-shopify-shop-domain'] as string || '').trim().toLowerCase();
+
+  res.status(200).json({ received: true });
+
+  try {
+    const channelResult = await query(
+      "SELECT c.* FROM channels c WHERE LOWER(TRIM(REPLACE(REPLACE(c.shopify_store_url, 'https://', ''), 'http://', ''))) = $1 AND c.type = 'shopify'",
+      [shopDomain]
+    );
+    const channel = channelResult.rows[0];
+    if (!channel) {
+      console.warn(`[Webhook] Cancellation: no channel found for shop: ${shopDomain}`);
+      return;
+    }
+
+    if (channel.settings?.webhook_secret && hmac) {
+      const rawBody = (req as unknown as Record<string, unknown>).rawBody as string || JSON.stringify(req.body);
+      if (!verifyShopifyHmac(rawBody, hmac, channel.settings.webhook_secret)) {
+        console.warn(`[Webhook] Cancellation: HMAC verification failed for shop: ${shopDomain}`);
+        return;
+      }
+    }
+
+    const order = req.body;
+    const shopifyOrderId = String(order.id);
+    const orderNumber = order.name || `#${order.order_number}`;
+
+    // Find our stored order record
+    const orderResult = await query(
+      'SELECT id, odoo_order_id, status FROM orders WHERE channel_id = $1 AND shopify_order_id = $2',
+      [channel.id, shopifyOrderId]
+    );
+    const orderRow = orderResult.rows[0];
+    if (!orderRow) {
+      console.log(`[Webhook] Cancellation: order ${orderNumber} not found in DB, skipping`);
+      return;
+    }
+    if (orderRow.status === 'cancelled') {
+      console.log(`[Webhook] Cancellation: order ${orderNumber} already cancelled`);
+      return;
+    }
+
+    // Update our status immediately
+    await query("UPDATE orders SET status = 'cancelled' WHERE id = $1", [orderRow.id]);
+
+    // Cancel in Odoo if we have an Odoo order ID
+    if (orderRow.odoo_order_id) {
+      const feedResult = await query(
+        "SELECT odoo_url, odoo_database, odoo_username, odoo_api_key FROM feeds WHERE client_id = $1 AND type = 'odoo' LIMIT 1",
+        [channel.client_id]
+      );
+      const odooFeed = feedResult.rows[0];
+      if (odooFeed) {
+        const config: OdooConfig = {
+          url: odooFeed.odoo_url,
+          database: odooFeed.odoo_database,
+          username: odooFeed.odoo_username,
+          apiKey: odooFeed.odoo_api_key,
+        };
+        try {
+          await cancelOdooSaleOrder(config, Number(orderRow.odoo_order_id));
+          console.log(`[Webhook] Cancelled Odoo order ${orderRow.odoo_order_id} for Shopify order ${orderNumber}`);
+        } catch (err) {
+          console.error(`[Webhook] Failed to cancel Odoo order ${orderRow.odoo_order_id}:`, err);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[Webhook] Error processing cancellation:', err);
+  }
+});
 
 export default router;

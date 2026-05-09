@@ -7,8 +7,10 @@
 import { query } from '../db.js';
 import { importFeedProducts } from './feedService.js';
 import { runSyncJob } from './shopifySyncService.js';
+import { getOdooOrderStates, type OdooConfig } from './odooService.js';
 
 let schedulerInterval: ReturnType<typeof setInterval> | null = null;
+let cancelCheckInterval: ReturnType<typeof setInterval> | null = null;
 
 export function startScheduler() {
   if (schedulerInterval) return;
@@ -97,13 +99,103 @@ export function startScheduler() {
     }
   }, 60_000);
 
-  console.log('[Scheduler] Started — checking automations every 60s');
+  // Check Odoo for cancelled orders every 5 minutes and sync back to Shopify
+  cancelCheckInterval = setInterval(syncOdooCancellationsToShopify, 5 * 60_000);
+
+  console.log('[Scheduler] Started — checking automations every 60s, Odoo cancellations every 5m');
 }
 
 export function stopScheduler() {
   if (schedulerInterval) {
     clearInterval(schedulerInterval);
     schedulerInterval = null;
-    console.log('[Scheduler] Stopped');
+  }
+  if (cancelCheckInterval) {
+    clearInterval(cancelCheckInterval);
+    cancelCheckInterval = null;
+  }
+  console.log('[Scheduler] Stopped');
+}
+
+// ── Odoo → Shopify cancellation sync ──────────────────────────────────────
+
+async function syncOdooCancellationsToShopify() {
+  try {
+    // Find all synced orders that have an Odoo order ID, grouped by client
+    const result = await query(`
+      SELECT o.id, o.shopify_order_id, o.odoo_order_id, o.channel_id,
+             o.client_id,
+             ch.shopify_store_url, ch.shopify_access_token, ch.shopify_api_version,
+             f.odoo_url, f.odoo_database, f.odoo_username, f.odoo_api_key
+      FROM orders o
+      JOIN channels ch ON ch.id = o.channel_id
+      JOIN feeds f ON f.client_id = o.client_id AND f.type = 'odoo'
+      WHERE o.status = 'synced'
+        AND o.odoo_order_id IS NOT NULL
+      LIMIT 100
+    `);
+
+    if (result.rows.length === 0) return;
+
+    // Group by Odoo config (same client = same Odoo instance)
+    const byClient = new Map<string, typeof result.rows>();
+    for (const row of result.rows) {
+      const key = row.client_id;
+      if (!byClient.has(key)) byClient.set(key, []);
+      byClient.get(key)!.push(row);
+    }
+
+    for (const [, rows] of byClient) {
+      const first = rows[0];
+      const config: OdooConfig = {
+        url: first.odoo_url,
+        database: first.odoo_database,
+        username: first.odoo_username,
+        apiKey: first.odoo_api_key,
+      };
+
+      const odooIds = rows.map(r => Number(r.odoo_order_id));
+      let stateMap: Map<number, string>;
+      try {
+        stateMap = await getOdooOrderStates(config, odooIds);
+      } catch (err) {
+        console.error('[Scheduler] Failed to fetch Odoo order states:', err);
+        continue;
+      }
+
+      for (const row of rows) {
+        const state = stateMap.get(Number(row.odoo_order_id));
+        if (state !== 'cancel') continue;
+
+        console.log(`[Scheduler] Odoo order ${row.odoo_order_id} is cancelled — cancelling Shopify order ${row.shopify_order_id}`);
+
+        // Cancel in Shopify
+        try {
+          const storeDomain = row.shopify_store_url.replace(/^https?:\/\//, '').replace(/\/$/, '');
+          const url = `https://${storeDomain}/admin/api/${row.shopify_api_version}/orders/${row.shopify_order_id}/cancel.json`;
+          const res = await fetch(url, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Shopify-Access-Token': row.shopify_access_token,
+            },
+            body: JSON.stringify({ reason: 'other', email: false }),
+          });
+          if (!res.ok) {
+            const body = await res.text();
+            console.error(`[Scheduler] Shopify cancel failed (${res.status}): ${body}`);
+          } else {
+            console.log(`[Scheduler] Shopify order ${row.shopify_order_id} cancelled successfully`);
+          }
+        } catch (err) {
+          console.error('[Scheduler] Failed to cancel Shopify order:', err);
+        }
+
+        // Update our DB regardless of Shopify result (Odoo is the source of truth here)
+        await query("UPDATE orders SET status = 'cancelled' WHERE id = $1", [row.id]);
+      }
+    }
+  } catch (err) {
+    console.error('[Scheduler] syncOdooCancellationsToShopify error:', err);
   }
 }
