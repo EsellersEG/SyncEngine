@@ -80,9 +80,9 @@ router.post('/:id/retry', async (req: AuthRequest, res) => {
     const rawData = order.raw_data;
     const lineItems = rawData.line_items || [];
 
-    // If EAN mode, fetch barcodes from Shopify
+    // Always fetch barcodes from Shopify variants — barcode is the most reliable Odoo match key
     let barcodeMap = new Map<string, string>();
-    if (config.productSearchBy === 'ean' && channel) {
+    if (channel) {
       const variantIds = lineItems
         .map((li: Record<string, unknown>) => String(li.variant_id || ''))
         .filter(Boolean);
@@ -115,9 +115,8 @@ router.post('/:id/retry', async (req: AuthRequest, res) => {
       total_price: String(rawData.total_price || '0'),
       line_items: lineItems.map((li: Record<string, unknown>) => {
         const variantId = String(li.variant_id || '');
-        const lookupKey = (config.productSearchBy === 'ean' && barcodeMap.get(variantId))
-          ? barcodeMap.get(variantId)!
-          : String(li.sku || '');
+        // Prefer barcode from Shopify, fall back to line item SKU field
+        const lookupKey = barcodeMap.get(variantId) || String(li.sku || '');
         return {
           sku: lookupKey,
           name: String(li.name || ''),

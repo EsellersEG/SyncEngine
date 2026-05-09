@@ -157,14 +157,12 @@ async function syncOrderToOdoo(channel: ChannelInfo, shopifyOrderId: string, ord
   try {
     const lineItems = (order.line_items as Array<Record<string, unknown>>) || [];
 
-    // If EAN mode, fetch barcodes from Shopify to use as the lookup key
+    // Always fetch barcodes from Shopify variants — barcode is the most reliable Odoo match key
+    const variantIds = lineItems.map(li => String(li.variant_id || '')).filter(Boolean);
     let barcodeMap = new Map<string, string>();
-    if (config.productSearchBy === 'ean') {
-      const variantIds = lineItems
-        .map(li => String(li.variant_id || ''))
-        .filter(Boolean);
+    if (variantIds.length > 0) {
       barcodeMap = await getShopifyVariantBarcodes(channel, variantIds);
-      console.log(`[Webhook] EAN mode: fetched ${barcodeMap.size} barcodes from Shopify`);
+      console.log(`[Webhook] Fetched ${barcodeMap.size} barcodes from Shopify for order matching`);
     }
 
     const result = await createOdooSaleOrder(config, {
@@ -173,10 +171,8 @@ async function syncOrderToOdoo(channel: ChannelInfo, shopifyOrderId: string, ord
       total_price: String(order.total_price || '0'),
       line_items: lineItems.map(li => {
         const variantId = String(li.variant_id || '');
-        // Use barcode as the lookup key in EAN mode, otherwise use SKU
-        const lookupKey = (config.productSearchBy === 'ean' && barcodeMap.get(variantId))
-          ? barcodeMap.get(variantId)!
-          : String(li.sku || '');
+        // Prefer barcode from Shopify, fall back to line item SKU field
+        const lookupKey = barcodeMap.get(variantId) || String(li.sku || '');
         return {
           sku: lookupKey,
           name: String(li.name || ''),
