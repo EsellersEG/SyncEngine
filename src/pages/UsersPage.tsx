@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import { useAuth } from '../hooks/useAuth';
-import { Plus, UserCheck, Shield, Eye } from 'lucide-react';
+import { Plus, UserCheck, Shield, Eye, Pencil, X } from 'lucide-react';
 interface User {
   id: string; name: string; email: string; role: string;
   is_active: boolean; created_at: string;
