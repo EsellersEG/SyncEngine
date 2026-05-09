@@ -102,6 +102,9 @@ export function startScheduler() {
   // Check Odoo for cancelled orders every 5 minutes and sync back to Shopify
   cancelCheckInterval = setInterval(syncOdooCancellationsToShopify, 5 * 60_000);
 
+  // Also poll feeds with sync_interval_minutes set every 60 seconds
+  setInterval(runScheduledFeedImports, 60_000);
+
   console.log('[Scheduler] Started — checking automations every 60s, Odoo cancellations every 5m');
 }
 
@@ -197,5 +200,38 @@ async function syncOdooCancellationsToShopify() {
     }
   } catch (err) {
     console.error('[Scheduler] syncOdooCancellationsToShopify error:', err);
+  }
+}
+
+// ── Feed-level scheduled imports ──────────────────────────────────────────
+
+async function runScheduledFeedImports() {
+  try {
+    // Find feeds with sync_interval_minutes set that are due for import
+    const result = await query(`
+      SELECT f.id, f.client_id, f.type, f.name,
+             f.spreadsheet_id, f.sheet_name, f.header_row, f.service_account_json,
+             f.odoo_url, f.odoo_database, f.odoo_username, f.odoo_api_key,
+             f.odoo_search_by, f.odoo_warehouse_id, f.sync_interval_minutes, f.last_sync_at
+      FROM feeds f
+      WHERE f.sync_interval_minutes IS NOT NULL
+        AND f.sync_interval_minutes > 0
+        AND (
+          f.last_sync_at IS NULL
+          OR f.last_sync_at < NOW() - (f.sync_interval_minutes || ' minutes')::interval
+        )
+    `);
+
+    for (const feed of result.rows) {
+      console.log(`[Scheduler] Auto-importing feed: ${feed.name} (every ${feed.sync_interval_minutes}m)`);
+      // Mark as started by updating last_sync_at immediately to prevent duplicate runs
+      await query('UPDATE feeds SET last_sync_at = NOW() WHERE id = $1', [feed.id]);
+      // Run import async
+      importFeedProducts(feed).catch(err => {
+        console.error(`[Scheduler] Feed import failed for ${feed.name}:`, err);
+      });
+    }
+  } catch (err) {
+    console.error('[Scheduler] runScheduledFeedImports error:', err);
   }
 }
