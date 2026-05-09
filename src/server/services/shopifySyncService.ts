@@ -589,11 +589,28 @@ async function syncProductTurbo(
       console.warn(`[SyncFlow] No locationId for stock update of ${product.sku}`);
     }
 
+    // For stock/price logging: prefer the mapped (adjusted) value, fall back to raw Odoo fields,
+    // then fall back to the Shopify current value read from the product map.
+    const rawQty = product.raw_data.qty_available;
+    const rawPrice = product.raw_data.list_price;
+
+    const loggedStockTo = !isNaN(stockQty)
+      ? stockQty
+      : (rawQty != null ? Number(rawQty) : null);
+
+    const loggedPriceTo = mapped.price != null
+      ? String(mapped.price)
+      : (rawPrice != null ? String(rawPrice) : null);
+
+    // stock_from / price_from: Shopify's current values (may be null if inventory tracking off)
+    const loggedStockFrom = shopifyIds.inventoryQuantity != null ? shopifyIds.inventoryQuantity : null;
+    const loggedPriceFrom = shopifyIds.price != null && shopifyIds.price !== '' ? shopifyIds.price : null;
+
     const logDetails: SyncLogDetails = {
-      stock_from: shopifyIds.inventoryQuantity ?? null,
-      stock_to: !isNaN(stockQty) ? stockQty : null,
-      price_from: shopifyIds.price ?? null,
-      price_to: mapped.price != null ? String(mapped.price) : null,
+      stock_from: loggedStockFrom,
+      stock_to: loggedStockTo,
+      price_from: loggedPriceFrom,
+      price_to: loggedPriceTo,
       warehouse_name: warehouseName ?? null,
     };
     await logSyncEntry(jobId, product.sku, 'updated', 'Turbo sync succeeded', logDetails);
