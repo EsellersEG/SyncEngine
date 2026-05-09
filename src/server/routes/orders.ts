@@ -55,7 +55,7 @@ router.post('/:id/retry', async (req: AuthRequest, res) => {
 
     // Get Odoo config from feed
     const feedResult = await query(
-      "SELECT odoo_url, odoo_database, odoo_username, odoo_api_key, odoo_search_by FROM feeds WHERE client_id = $1 AND type = 'odoo' LIMIT 1",
+      "SELECT odoo_url, odoo_database, odoo_username, odoo_api_key, odoo_search_by, odoo_warehouse_id FROM feeds WHERE client_id = $1 AND type = 'odoo' LIMIT 1",
       [order.client_id]
     );
     const odooFeed = feedResult.rows[0];
@@ -67,6 +67,7 @@ router.post('/:id/retry', async (req: AuthRequest, res) => {
       username: odooFeed.odoo_username,
       apiKey: odooFeed.odoo_api_key,
       productSearchBy: odooFeed.odoo_search_by || 'automatic',
+      warehouseId: odooFeed.odoo_warehouse_id || undefined,
     };
 
     // Get channel for Shopify API access (needed for EAN barcode lookup)

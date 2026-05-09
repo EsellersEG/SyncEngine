@@ -424,6 +424,7 @@ export async function createOdooSaleOrder(
     partner_id: partnerId,
     client_order_ref: shopifyOrder.name, // Shopify order number
     order_line: orderLines,
+    ...(config.warehouseId ? { warehouse_id: config.warehouseId } : {}),
   }]) as number;
 
   // 4. Confirm the order
