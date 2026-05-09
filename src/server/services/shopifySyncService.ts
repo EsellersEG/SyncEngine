@@ -27,6 +27,7 @@ interface SyncJobConfig {
   skus?: string[]; // If provided, only sync these SKUs
   priceAdjustmentPercent?: number;
   priceRoundingMode?: 'none' | 'up' | 'down';
+  warehouseName?: string;
 }
 
 interface ProductRow {
@@ -303,7 +304,7 @@ async function deleteExistingProductMedia(channel: Channel, productId: string): 
 }
 
 // ── SKU → Shopify ID lookup via GraphQL ────────────────────────────────────
-async function getShopifyProductMap(channel: Channel): Promise<Map<string, { productId: string; variantId: string; inventoryItemId: string }>> {
+async function getShopifyProductMap(channel: Channel): Promise<Map<string, { productId: string; variantId: string; inventoryItemId: string; price?: string; inventoryQuantity?: number }>> {
   const map = new Map();
   let cursor: string | null = null;
   let hasMore = true;
@@ -321,6 +322,8 @@ async function getShopifyProductMap(channel: Channel): Promise<Map<string, { pro
                   id
                   sku
                   barcode
+                  price
+                  inventoryQuantity
                   inventoryItem { id }
                 }
               }
@@ -337,7 +340,7 @@ async function getShopifyProductMap(channel: Channel): Promise<Map<string, { pro
         edges: Array<{
           node: {
             id: string;
-            variants: { edges: Array<{ node: { id: string; sku: string; barcode: string; inventoryItem: { id: string } } }> };
+            variants: { edges: Array<{ node: { id: string; sku: string; barcode: string; price: string; inventoryQuantity: number; inventoryItem: { id: string } } }> };
           };
         }>;
       };
@@ -350,6 +353,8 @@ async function getShopifyProductMap(channel: Channel): Promise<Map<string, { pro
           productId: productEdge.node.id,
           variantId: v.id,
           inventoryItemId: v.inventoryItem.id,
+          price: v.price,
+          inventoryQuantity: v.inventoryQuantity,
         };
         if (v.sku) {
           map.set(v.sku, entry);
@@ -373,8 +378,8 @@ async function getShopifyProductMap(channel: Channel): Promise<Map<string, { pro
 async function getShopifyProductMapForSKUs(
   channel: Channel,
   skus: string[]
-): Promise<Map<string, { productId: string; variantId: string; inventoryItemId: string }>> {
-  const map = new Map<string, { productId: string; variantId: string; inventoryItemId: string }>();
+): Promise<Map<string, { productId: string; variantId: string; inventoryItemId: string; price?: string; inventoryQuantity?: number }>> {
+  const map = new Map<string, { productId: string; variantId: string; inventoryItemId: string; price?: string; inventoryQuantity?: number }>();
 
   // Query up to 10 SKUs at a time using search
   for (let i = 0; i < skus.length; i += 10) {
@@ -392,6 +397,8 @@ async function getShopifyProductMapForSKUs(
                     id
                     sku
                     barcode
+                    price
+                    inventoryQuantity
                     inventoryItem { id }
                   }
                 }
@@ -405,7 +412,7 @@ async function getShopifyProductMapForSKUs(
         edges: Array<{
           node: {
             id: string;
-            variants: { edges: Array<{ node: { id: string; sku: string; barcode: string; inventoryItem: { id: string } } }> };
+            variants: { edges: Array<{ node: { id: string; sku: string; barcode: string; price: string; inventoryQuantity: number; inventoryItem: { id: string } } }> };
           };
         }>;
       };
@@ -418,6 +425,8 @@ async function getShopifyProductMapForSKUs(
           productId: productEdge.node.id,
           variantId: v.id,
           inventoryItemId: v.inventoryItem.id,
+          price: v.price,
+          inventoryQuantity: v.inventoryQuantity,
         };
         if (v.sku) map.set(v.sku, entry);
         if (v.barcode && !map.has(v.barcode)) map.set(v.barcode, entry);
@@ -461,7 +470,7 @@ async function turboSync(
     }
 
     const batch = products.slice(i, i + BATCH_SIZE);
-    await Promise.all(batch.map(p => syncProductTurbo(channel, p, mappings, metafieldMappings, shopifyMap, jobId, locationId, 0, priceAdjustmentPercent, priceRoundingMode)));
+    await Promise.all(batch.map(p => syncProductTurbo(channel, p, mappings, metafieldMappings, shopifyMap, jobId, locationId, 0, priceAdjustmentPercent, priceRoundingMode, warehouseName)));
     await query('UPDATE sync_jobs SET processed_count = $1 WHERE id = $2', [Math.min(i + BATCH_SIZE, products.length), jobId]);
   }
 }
@@ -471,12 +480,13 @@ async function syncProductTurbo(
   product: ProductRow,
   mappings: AttributeMapping[],
   metafieldMappings: AttributeMapping[],
-  shopifyMap: Map<string, { productId: string; variantId: string; inventoryItemId: string }>,
+  shopifyMap: Map<string, { productId: string; variantId: string; inventoryItemId: string; price?: string; inventoryQuantity?: number }>,
   jobId: string,
   locationId?: string,
   retries = 0,
   priceAdjustmentPercent = 0,
-  priceRoundingMode: 'none' | 'up' | 'down' = 'none'
+  priceRoundingMode: 'none' | 'up' | 'down' = 'none',
+  warehouseName?: string
 ): Promise<void> {
   const shopifyIds = shopifyMap.get(product.sku);
 
@@ -578,13 +588,20 @@ async function syncProductTurbo(
       console.warn(`[SyncFlow] No locationId for stock update of ${product.sku}`);
     }
 
-    await logSyncEntry(jobId, product.sku, 'updated', 'Turbo sync succeeded');
+    const logDetails: SyncLogDetails = {
+      stock_from: shopifyIds.inventoryQuantity ?? null,
+      stock_to: !isNaN(stockQty) ? stockQty : null,
+      price_from: shopifyIds.price ?? null,
+      price_to: mapped.price != null ? String(mapped.price) : null,
+      warehouse_name: warehouseName ?? null,
+    };
+    await logSyncEntry(jobId, product.sku, 'updated', 'Turbo sync succeeded', logDetails);
     await query('UPDATE sync_jobs SET updated_count = updated_count + 1 WHERE id = $1', [jobId]);
   } catch (err: unknown) {
     const errMsg = String(err);
     if (errMsg.includes('Throttled') && retries < MAX_RETRIES) {
       await sleep(RETRY_DELAY_MS * (retries + 1));
-      return syncProductTurbo(channel, product, mappings, metafieldMappings, shopifyMap, jobId, locationId, retries + 1, priceAdjustmentPercent, priceRoundingMode);
+      return syncProductTurbo(channel, product, mappings, metafieldMappings, shopifyMap, jobId, locationId, retries + 1, priceAdjustmentPercent, priceRoundingMode, warehouseName);
     }
     await logSyncEntry(jobId, product.sku, 'failed', errMsg);
     await query('UPDATE sync_jobs SET failed_count = failed_count + 1 WHERE id = $1', [jobId]);
@@ -1404,6 +1421,7 @@ export async function runSyncJob(config: SyncJobConfig) {
     skus,
     priceAdjustmentPercent = 0,
     priceRoundingMode = 'none',
+    warehouseName,
   } = config;
 
   try {
@@ -1445,7 +1463,7 @@ export async function runSyncJob(config: SyncJobConfig) {
 
     if (preset === 'price_stock_meta' || (config.fields && config.fields.every(f => ['price', 'stock', 'metafields'].includes(f)))) {
       console.log('[SyncFlow] Pathway: TURBO');
-      await turboSync(channel, products, mappings, jobId, priceAdjustmentPercent, priceRoundingMode);
+      await turboSync(channel, products, mappings, jobId, priceAdjustmentPercent, priceRoundingMode, warehouseName);
     } else if (products.length < 50) {
       console.log('[SyncFlow] Pathway: INDIVIDUAL');
       await individualSync(channel, products, mappings, jobId, preset !== 'sync_all_no_images', priceAdjustmentPercent, priceRoundingMode);

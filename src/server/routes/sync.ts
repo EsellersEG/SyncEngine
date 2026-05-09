@@ -26,7 +26,7 @@ router.post('/start', async (req: AuthRequest, res) => {
     }
 
     const feedResult = await query(
-      'SELECT id, type FROM feeds WHERE id = $1',
+      'SELECT id, type, odoo_warehouse_name FROM feeds WHERE id = $1',
       [feed_id]
     );
     const feed = feedResult.rows[0];
@@ -90,6 +90,7 @@ router.post('/start', async (req: AuthRequest, res) => {
       filterRules: filter_rules,
       priceAdjustmentPercent,
       priceRoundingMode,
+      warehouseName: feed.odoo_warehouse_name || undefined,
     }).catch(err => {
       console.error(`[SyncRoute] Job ${jobId} crashed:`, err);
     });
@@ -306,5 +307,80 @@ function evaluateRules(rawData: Record<string, unknown>, rules: Array<{ field: s
   
   return currentResult;
 }
+
+// GET /api/sync/jobs/:id/export — export sync logs as CSV
+router.get('/jobs/:id/export', async (req, res) => {
+  try {
+    const { action } = req.query;
+
+    // Get job info (to determine preset for column set)
+    const jobResult = await query(
+      `SELECT sj.id, sj.preset, ch.name as channel_name, sj.created_at,
+              f.odoo_warehouse_name, f.odoo_warehouse_id
+       FROM sync_jobs sj
+       LEFT JOIN channels ch ON sj.channel_id = ch.id
+       LEFT JOIN feeds f ON sj.feed_id = f.id
+       WHERE sj.id = $1`,
+      [req.params.id]
+    );
+    if (!jobResult.rows[0]) return res.status(404).json({ error: 'Job not found' });
+    const job = jobResult.rows[0];
+    const isOdoo = job.preset === 'price_stock_meta';
+    const warehouseLabel = job.odoo_warehouse_name || (job.odoo_warehouse_id ? `Warehouse #${job.odoo_warehouse_id}` : 'All Warehouses');
+
+    // Fetch all logs (no page limit for export)
+    let whereClause = 'WHERE job_id = $1';
+    const params: unknown[] = [req.params.id];
+    if (action && action !== 'all') {
+      whereClause += ` AND action = $${params.length + 1}`;
+      params.push(action);
+    }
+    const logsResult = await query(
+      `SELECT sku, action, message, details, created_at FROM sync_logs ${whereClause} ORDER BY created_at ASC`,
+      params
+    );
+
+    // Build CSV
+    const escape = (v: unknown) => {
+      const s = v == null ? '' : String(v);
+      return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+
+    const baseHeaders = ['SKU', 'Status', 'Action', 'Message', 'Date & Time'];
+    const odooHeaders = isOdoo ? ['Stock Before', 'Stock After', 'Price Before', 'Price After', 'Warehouse'] : [];
+    const headers = [...baseHeaders, ...odooHeaders];
+
+    const rows = logsResult.rows.map(log => {
+      const status = log.action === 'created' || log.action === 'updated' ? 'Success'
+        : log.action === 'failed' ? 'Failed' : 'Skipped';
+      const d = log.details as { stock_from?: number | null; stock_to?: number | null; price_from?: string | null; price_to?: string | null; warehouse_name?: string | null } | null;
+      const base = [
+        escape(log.sku),
+        escape(status),
+        escape(log.action),
+        escape(log.message),
+        escape(new Date(log.created_at).toLocaleString()),
+      ];
+      const odoo = isOdoo ? [
+        escape(d?.stock_from ?? ''),
+        escape(d?.stock_to ?? ''),
+        escape(d?.price_from ?? ''),
+        escape(d?.price_to ?? ''),
+        escape(d?.warehouse_name ?? warehouseLabel),
+      ] : [];
+      return [...base, ...odoo].join(',');
+    });
+
+    const csv = [headers.join(','), ...rows].join('\n');
+    const filename = `sync-${job.preset}-${new Date(job.created_at).toISOString().slice(0,16).replace('T', '_')}.csv`;
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    return res.send(csv);
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to export logs' });
+  }
+});
 
 export default router;

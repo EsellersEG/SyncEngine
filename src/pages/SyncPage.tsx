@@ -14,6 +14,7 @@ interface SyncJob {
 }
 interface SyncLog {
   id: string; sku: string; action: string; message: string; created_at: string;
+  details?: { stock_from?: number | null; stock_to?: number | null; price_from?: string | null; price_to?: string | null };
 }
 interface FilterRule {
   field: string; operator: string; value: string; logic?: string;
@@ -148,6 +149,32 @@ export default function SyncPage() {
   async function handleCancel(jobId: string) {
     await api.post(`/sync/jobs/${jobId}/cancel`, {});
     setJobs(prev => prev.map(j => j.id === jobId ? { ...j, status: 'cancelled' } : j));
+  }
+
+  async function handleExportCSV() {
+    if (!validationJobId) return;
+    try {
+      const token = localStorage.getItem('sync_engine_token');
+      const params = validationFilter !== 'all' ? `?action=${validationFilter}` : '';
+      const res = await fetch(`/api/sync/jobs/${validationJobId}/export${params}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) { alert('Export failed'); return; }
+      const blob = await res.blob();
+      const disposition = res.headers.get('Content-Disposition') || '';
+      const nameMatch = disposition.match(/filename="(.+)"/);
+      const filename = nameMatch ? nameMatch[1] : 'sync-export.csv';
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      alert('Export failed: ' + (err instanceof Error ? err.message : String(err)));
+    }
   }
 
   async function previewFilter() {
@@ -409,6 +436,15 @@ export default function SyncPage() {
               <p className="page-subtitle">View detailed results for each product across all syncs</p>
             </div>
           </div>
+          {validationJobId && (
+            <button
+              className="btn btn-secondary btn-sm"
+              style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+              onClick={handleExportCSV}
+            >
+              <Download size={13} /> Export CSV
+            </button>
+          )}
         </div>
         <div className="page-body">
           <div className="glass-card" style={{ padding: 20, marginBottom: 20 }}>
@@ -453,17 +489,22 @@ export default function SyncPage() {
                   <th>SKU</th>
                   <th>Status</th>
                   <th>Action</th>
+                  {selectedJob?.preset === 'price_stock_meta' && <>
+                    <th>Stock</th>
+                    <th>Price</th>
+                    <th>Warehouse</th>
+                  </>}
                   <th>Message</th>
                   <th>Date & Time</th>
                 </tr>
               </thead>
               <tbody>
                 {validationLoading ? (
-                  <tr><td colSpan={5} style={{ textAlign: 'center', padding: 40 }}>
+                  <tr><td colSpan={selectedJob?.preset === 'price_stock_meta' ? 8 : 5} style={{ textAlign: 'center', padding: 40 }}>
                     <div className="spinner" style={{ width: 24, height: 24, border: '3px solid rgba(79,110,247,0.2)', borderTopColor: '#4f6ef7', borderRadius: '50%', margin: '0 auto' }} />
                   </td></tr>
                 ) : validationLogs.length === 0 ? (
-                  <tr><td colSpan={5} style={{ textAlign: 'center', padding: 40, color: '#475569' }}>No logs found</td></tr>
+                  <tr><td colSpan={selectedJob?.preset === 'price_stock_meta' ? 8 : 5} style={{ textAlign: 'center', padding: 40, color: '#475569' }}>No logs found</td></tr>
                 ) : validationLogs.map(log => (
                   <tr key={log.id}>
                     <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 600, color: '#e2e8f0' }}>{log.sku}</td>
@@ -476,6 +517,29 @@ export default function SyncPage() {
                       </span>
                     </td>
                     <td><span className="badge badge-info">{log.action.charAt(0).toUpperCase() + log.action.slice(1)}</span></td>
+                    {selectedJob?.preset === 'price_stock_meta' && <>
+                      <td style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+                        {log.details?.stock_from != null || log.details?.stock_to != null ? (
+                          <span>
+                            <span style={{ color: '#94a3b8' }}>{log.details?.stock_from ?? '-'}</span>
+                            <span style={{ color: '#475569', margin: '0 4px' }}>→</span>
+                            <span style={{ color: log.details?.stock_to != null && log.details?.stock_from != null && log.details.stock_to > log.details.stock_from ? '#4ade80' : log.details?.stock_to != null && log.details?.stock_from != null && log.details.stock_to < log.details.stock_from ? '#f87171' : '#e2e8f0' }}>{log.details?.stock_to ?? '-'}</span>
+                          </span>
+                        ) : <span style={{ color: '#475569' }}>-</span>}
+                      </td>
+                      <td style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+                        {log.details?.price_from != null || log.details?.price_to != null ? (
+                          <span>
+                            <span style={{ color: '#94a3b8' }}>{log.details?.price_from ?? '-'}</span>
+                            <span style={{ color: '#475569', margin: '0 4px' }}>→</span>
+                            <span style={{ color: '#60a5fa' }}>{log.details?.price_to ?? '-'}</span>
+                          </span>
+                        ) : <span style={{ color: '#475569' }}>-</span>}
+                      </td>
+                      <td style={{ fontSize: 12, color: '#94a3b8', whiteSpace: 'nowrap' }}>
+                        {log.details?.warehouse_name ?? <span style={{ color: '#475569', fontStyle: 'italic' }}>All warehouses</span>}
+                      </td>
+                    </>}
                     <td style={{ fontSize: 12, color: '#64748b', maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={log.message}>{log.message || '-'}</td>
                     <td style={{ fontSize: 12, color: '#94a3b8', whiteSpace: 'nowrap' }}>{new Date(log.created_at).toLocaleString()}</td>
                   </tr>

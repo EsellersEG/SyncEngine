@@ -92,6 +92,7 @@ async function init() {
       `ALTER TABLE automations ADD COLUMN IF NOT EXISTS rounding_mode VARCHAR(20) NOT NULL DEFAULT 'none'`,
       `ALTER TABLE orders ADD COLUMN IF NOT EXISTS odoo_order_name VARCHAR(100)`,
       `ALTER TABLE feeds ADD COLUMN IF NOT EXISTS odoo_warehouse_id INT`,
+      `ALTER TABLE feeds ADD COLUMN IF NOT EXISTS odoo_warehouse_name TEXT`,
     ];
     for (const sql of migrations) {
       await client.query(sql);
