@@ -26,17 +26,28 @@ router.post('/start', async (req: AuthRequest, res) => {
     }
 
     const feedResult = await query(
-      'SELECT id, type, odoo_warehouse_id, odoo_warehouse_name FROM feeds WHERE id = $1',
+      'SELECT id, type, odoo_url, odoo_database, odoo_username, odoo_api_key, odoo_warehouse_id, odoo_warehouse_name FROM feeds WHERE id = $1',
       [feed_id]
     );
     const feed = feedResult.rows[0];
     if (!feed) return res.status(404).json({ error: 'Feed not found' });
 
     const effectivePreset = feed.type === 'odoo' ? 'price_stock_meta' : preset;
-    // Derive warehouse label: stored name → fallback to ID → nothing
-    const resolvedWarehouseName: string | undefined =
-      feed.odoo_warehouse_name ||
-      (feed.odoo_warehouse_id ? `Warehouse #${feed.odoo_warehouse_id}` : undefined);
+
+    // Resolve warehouse name: if ID is set but name is null, fetch from Odoo and persist it
+    let resolvedWarehouseName: string | undefined = feed.odoo_warehouse_name || undefined;
+    if (feed.odoo_warehouse_id && !feed.odoo_warehouse_name && feed.odoo_url && feed.odoo_database && feed.odoo_username && feed.odoo_api_key) {
+      try {
+        const { fetchOdooWarehouses } = await import('../services/odooService.js');
+        const warehouses = await fetchOdooWarehouses({ url: feed.odoo_url, database: feed.odoo_database, username: feed.odoo_username, apiKey: feed.odoo_api_key });
+        const wh = warehouses.find((w: { id: number; name: string }) => w.id === feed.odoo_warehouse_id);
+        if (wh) {
+          resolvedWarehouseName = wh.name;
+          // Persist so we don't need to fetch again next time
+          await query('UPDATE feeds SET odoo_warehouse_name = $1 WHERE id = $2', [wh.name, feed_id]);
+        }
+      } catch { /* ignore — fallback below */ }
+    }
 
     const automationResult = await query(
       `SELECT price_adjustment_percent, rounding_mode
