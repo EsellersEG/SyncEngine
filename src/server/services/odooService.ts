@@ -390,11 +390,13 @@ export async function createOdooSaleOrder(
 
   // 2. Map line items to Odoo product IDs
   const orderLines: Array<[number, number, Record<string, unknown>]> = [];
+  const unmatchedItems: string[] = [];
 
   for (const item of shopifyOrder.line_items) {
     let productId: number | null = null;
 
     if (item.sku) {
+      // Exact match attempts
       for (const field of getOdooProductSearchFields(config.productSearchBy)) {
         const found = await odooExecute(config, uid, 'product.product', 'search_read', [
           [[field, '=', item.sku]]
@@ -404,6 +406,29 @@ export async function createOdooSaleOrder(
           break;
         }
       }
+
+      // Last resort: partial name match (ilike) on the first meaningful segment before "|" or "/"
+      if (!productId) {
+        const namePart = item.sku.split(/[|\/]/)[0].trim();
+        if (namePart && namePart.length > 3) {
+          const found = await odooExecute(config, uid, 'product.product', 'search_read', [
+            [['name', 'ilike', namePart]]
+          ], { fields: ['id', 'name'], limit: 1 }) as Array<{ id: number; name: string }>;
+          if (found.length > 0) {
+            productId = found[0].id;
+            console.log(`[OdooOrder] Partial name match: "${item.sku}" → Odoo "${found[0].name}" (id=${productId})`);
+          }
+        }
+      }
+    }
+
+    if (!productId) {
+      // Cannot send product_id=false — Odoo rejects it on accountable lines.
+      // Log and skip this line to avoid failing the whole order.
+      const label = item.name || item.sku || 'Unknown';
+      unmatchedItems.push(label);
+      console.warn(`[OdooOrder] Could not match product for line "${label}" — skipping line`);
+      continue;
     }
 
     const discount = item.discount_allocations?.reduce((sum, d) => sum + parseFloat(d.amount || '0'), 0) || 0;
@@ -411,12 +436,20 @@ export async function createOdooSaleOrder(
     const discountPercent = priceUnit > 0 ? (discount / (priceUnit * item.quantity)) * 100 : 0;
 
     orderLines.push([0, 0, {
-      product_id: productId || false,
+      product_id: productId,
       name: item.name || item.sku || 'Unknown Product',
       product_uom_qty: item.quantity,
       price_unit: priceUnit,
       discount: discountPercent > 0 ? discountPercent : 0,
     }]);
+  }
+
+  if (orderLines.length === 0) {
+    throw new Error(
+      `No products could be matched in Odoo for order ${shopifyOrder.name}. ` +
+      `Unmatched items: ${unmatchedItems.join(', ')}. ` +
+      `Check that SKUs/barcodes in Shopify match the products in Odoo.`
+    );
   }
 
   // 3. Create sale order
