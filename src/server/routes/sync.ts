@@ -26,13 +26,17 @@ router.post('/start', async (req: AuthRequest, res) => {
     }
 
     const feedResult = await query(
-      'SELECT id, type, odoo_warehouse_name FROM feeds WHERE id = $1',
+      'SELECT id, type, odoo_warehouse_id, odoo_warehouse_name FROM feeds WHERE id = $1',
       [feed_id]
     );
     const feed = feedResult.rows[0];
     if (!feed) return res.status(404).json({ error: 'Feed not found' });
 
     const effectivePreset = feed.type === 'odoo' ? 'price_stock_meta' : preset;
+    // Derive warehouse label: stored name → fallback to ID → nothing
+    const resolvedWarehouseName: string | undefined =
+      feed.odoo_warehouse_name ||
+      (feed.odoo_warehouse_id ? `Warehouse #${feed.odoo_warehouse_id}` : undefined);
 
     const automationResult = await query(
       `SELECT price_adjustment_percent, rounding_mode
@@ -90,7 +94,7 @@ router.post('/start', async (req: AuthRequest, res) => {
       filterRules: filter_rules,
       priceAdjustmentPercent,
       priceRoundingMode,
-      warehouseName: feed.odoo_warehouse_name || undefined,
+      warehouseName: resolvedWarehouseName,
     }).catch(err => {
       console.error(`[SyncRoute] Job ${jobId} crashed:`, err);
     });

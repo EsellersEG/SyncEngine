@@ -28,6 +28,8 @@ interface FeedRecord {
   odoo_username?: string;
   odoo_api_key?: string;
   odoo_search_by?: 'automatic' | 'sku' | 'ean' | 'name';
+  odoo_warehouse_id?: number | null;
+  odoo_warehouse_name?: string | null;
 }
 
 function getAuthClient(serviceAccountJson?: string | null) {

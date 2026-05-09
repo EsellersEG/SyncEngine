@@ -413,7 +413,12 @@ export default function FeedsPage() {
                     <select className="input" value={form.odoo_warehouse_id}
                       onChange={e => {
                         const wh = odooWarehouses.find(w => String(w.id) === e.target.value);
-                        setForm(f => ({ ...f, odoo_warehouse_id: e.target.value, odoo_warehouse_name: wh?.name || '' }));
+                        setForm(f => ({
+                          ...f,
+                          odoo_warehouse_id: e.target.value,
+                          // Only update name if we have the list loaded; if not, keep existing name
+                          odoo_warehouse_name: e.target.value === '' ? '' : (wh?.name || f.odoo_warehouse_name),
+                        }));
                       }}>
                       <option value="">All warehouses (total stock)</option>
                       {/* Show placeholder for the saved warehouse while the list is loading */}
