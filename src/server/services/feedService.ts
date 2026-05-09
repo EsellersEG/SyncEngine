@@ -322,22 +322,5 @@ async function triggerAutoSync(feed: FeedRecord, changedSkus: string[]) {
       console.error(`[FeedService] Auto-sync job ${jobId} failed:`, err);
     });
   }
-    // Run async — no skus filter so ALL products get synced
-    runSyncJob({
-      jobId,
-      channel: {
-        id: channelId,
-        shopify_store_url: automation.shopify_store_url,
-        shopify_access_token: automation.shopify_access_token,
-        shopify_api_version: automation.shopify_api_version,
-        settings: automation.settings,
-      },
-      feedId: feed.id,
-      preset,
-      priceAdjustmentPercent: Number(automation.price_adjustment_percent || 0),
-      priceRoundingMode: automation.rounding_mode === 'up' || automation.rounding_mode === 'down' ? automation.rounding_mode : 'none',
-    }).catch(err => {
-      console.error(`[FeedService] Auto-sync job ${jobId} failed:`, err);
-    });
-  }
 }
+
