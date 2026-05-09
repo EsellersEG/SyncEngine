@@ -6,6 +6,56 @@ import { createOdooSaleOrder, type OdooConfig } from '../services/odooService.js
 const router = Router();
 router.use(authenticate);
 
+// GET /api/orders/export — download all orders as CSV
+router.get('/export', async (req: AuthRequest, res) => {
+  try {
+    const { channel_id, status } = req.query;
+    const result = await query(
+      `SELECT o.*, ch.name as channel_name
+       FROM orders o
+       LEFT JOIN channels ch ON o.channel_id = ch.id
+       WHERE ($1::uuid IS NULL OR o.channel_id = $1::uuid)
+         AND ($2::text IS NULL OR o.status = $2::text)
+       ORDER BY o.created_at DESC
+       LIMIT 10000`,
+      [channel_id || null, status || null]
+    );
+
+    const escape = (v: unknown) => {
+      if (v == null) return '';
+      const s = String(v).replace(/"/g, '""');
+      return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s}"` : s;
+    };
+
+    const headers = ['Order #', 'Customer Email', 'Total Price', 'Status', 'Odoo Order', 'Channel', 'Error', 'Synced At', 'Created At', 'Items'];
+    const rows = result.rows.map(o => {
+      const items = (o.raw_data?.line_items || [])
+        .map((li: { name: string; quantity: number; price: string }) => `${li.name} x${li.quantity} @ ${li.price}`)
+        .join(' | ');
+      return [
+        o.shopify_order_number,
+        o.customer_email,
+        o.total_price,
+        o.status,
+        o.odoo_order_name || o.odoo_order_id || '',
+        o.channel_name || '',
+        o.error_message || '',
+        o.synced_at ? new Date(o.synced_at).toLocaleString() : '',
+        new Date(o.created_at).toLocaleString(),
+        items,
+      ].map(escape).join(',');
+    });
+
+    const csv = [headers.join(','), ...rows].join('\n');
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="orders-${new Date().toISOString().slice(0, 10)}.csv"`);
+    return res.send(csv);
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Export failed' });
+  }
+});
+
 // GET /api/orders — list orders
 router.get('/', async (req: AuthRequest, res) => {
   try {

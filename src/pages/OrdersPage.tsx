@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
-import { ShoppingBag, RefreshCw, CheckCircle, Clock, XCircle, ExternalLink, X, Package } from 'lucide-react';
+import { ShoppingBag, RefreshCw, CheckCircle, Clock, XCircle, ExternalLink, X, Package, Download } from 'lucide-react';
 
 interface LineItem {
   name: string;
@@ -80,6 +80,25 @@ export default function OrdersPage() {
     }
   }
 
+  async function handleExportCSV() {
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch('/api/orders/export', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error('Export failed');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `orders-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Export failed');
+    }
+  }
+
   async function handleRetry(orderId: string) {
     setRetrying(orderId);
     try {
@@ -112,9 +131,14 @@ export default function OrdersPage() {
           <h1 className="page-title">Orders</h1>
           <p className="page-subtitle">Shopify → Odoo order synchronization</p>
         </div>
-        <button className="btn btn-secondary" onClick={fetchOrders}>
-          <RefreshCw size={14} /> Refresh
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn btn-secondary" onClick={handleExportCSV}>
+            <Download size={14} /> Export CSV
+          </button>
+          <button className="btn btn-secondary" onClick={fetchOrders}>
+            <RefreshCw size={14} /> Refresh
+          </button>
+        </div>
       </div>
 
       <div className="page-body">
