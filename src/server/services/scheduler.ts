@@ -99,8 +99,12 @@ export function startScheduler() {
     }
   }, 60_000);
 
-  // Check Odoo for cancelled orders every 5 minutes and sync back to Shopify
-  cancelCheckInterval = setInterval(syncOdooCancellationsToShopify, 5 * 60_000);
+  // Odoo→Shopify cancellation polling is disabled by default.
+  // Enable by setting ENABLE_ODOO_CANCEL_SYNC=true in environment variables.
+  if (process.env.ENABLE_ODOO_CANCEL_SYNC === 'true') {
+    cancelCheckInterval = setInterval(syncOdooCancellationsToShopify, 5 * 60_000);
+    console.log('[Scheduler] Odoo→Shopify cancellation polling enabled (every 5m)');
+  }
 
   // Also poll feeds with sync_interval_minutes set every 60 seconds
   setInterval(runScheduledFeedImports, 60_000);
