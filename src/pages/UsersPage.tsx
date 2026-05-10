@@ -45,11 +45,10 @@ export default function UsersPage() {
   const [editSaving, setEditSaving] = useState(false);
 
   useEffect(() => {
-    Promise.all([
-      api.get('/users') as Promise<User[]>,
-      api.get('/feeds') as Promise<Feed[]>,
-      api.get('/channels') as Promise<Channel[]>,
-    ]).then(([u, f, c]) => { setUsers(u); setFeeds(f); setChannels(c); }).finally(() => setLoading(false));
+    // Fetch each independently so a failure in one doesn't block the whole page
+    api.get('/users').then((u) => setUsers(u as User[])).catch(console.error).finally(() => setLoading(false));
+    api.get('/feeds').then((f) => setFeeds(f as Feed[])).catch(() => setFeeds([]));
+    api.get('/channels').then((c) => setChannels(c as Channel[])).catch(() => setChannels([]));
   }, []);
 
   async function handleCreate(e: React.FormEvent) {

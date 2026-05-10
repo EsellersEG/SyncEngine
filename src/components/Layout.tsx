@@ -35,19 +35,19 @@ export default function Layout() {
       {/* ── Sidebar ── */}
       <aside className="sidebar">
         {/* Logo */}
-        <div style={{ padding: '24px 20px 20px', borderBottom: '1px solid rgba(79,110,247,0.1)' }}>
+        <div style={{ padding: '24px 20px 20px', borderBottom: '1px solid rgba(255,165,0,0.1)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <div style={{
               width: 36, height: 36, borderRadius: 10,
-              background: 'linear-gradient(135deg, #4f6ef7, #7c3aed)',
+              background: 'linear-gradient(135deg, #ffa500, #ff6b00)',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              boxShadow: '0 4px 12px rgba(79,110,247,0.4)'
+              boxShadow: '0 4px 12px rgba(255,165,0,0.4)'
             }}>
-              <Activity size={18} color="white" />
+              <Activity size={18} color="#000" />
             </div>
             <div>
               <div style={{ fontSize: 15, fontWeight: 700, color: '#f1f5f9' }}>Sync-Engine</div>
-              <div style={{ fontSize: 11, color: '#4f6ef7', fontWeight: 500 }}>Multi-Channel Platform</div>
+              <div style={{ fontSize: 11, color: '#ffa500', fontWeight: 500 }}>By E-sellers.net</div>
             </div>
           </div>
         </div>
@@ -73,9 +73,9 @@ export default function Layout() {
                 fontWeight: 500,
                 textDecoration: 'none',
                 transition: 'all 0.2s',
-                color: isActive ? '#6b87ff' : '#64748b',
-                background: isActive ? 'rgba(79,110,247,0.1)' : 'transparent',
-                border: isActive ? '1px solid rgba(79,110,247,0.2)' : '1px solid transparent',
+                color: isActive ? '#ffa500' : '#64748b',
+                background: isActive ? 'rgba(255,165,0,0.1)' : 'transparent',
+                border: isActive ? '1px solid rgba(255,165,0,0.2)' : '1px solid transparent',
               })}
             >
               <item.icon size={16} />
@@ -85,7 +85,7 @@ export default function Layout() {
 
           {isAdmin && (
             <>
-              <div style={{ fontSize: 11, fontWeight: 600, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.08em', padding: '12px 8px 8px', marginTop: 8, borderTop: '1px solid rgba(79,110,247,0.1)' }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.08em', padding: '12px 8px 8px', marginTop: 8, borderTop: '1px solid rgba(255,165,0,0.1)' }}>
                 Admin
               </div>
               {adminItems.map(item => (
@@ -97,9 +97,9 @@ export default function Layout() {
                     padding: '9px 12px', borderRadius: 10, marginBottom: 2,
                     fontSize: 14, fontWeight: 500, textDecoration: 'none',
                     transition: 'all 0.2s',
-                    color: isActive ? '#6b87ff' : '#64748b',
-                    background: isActive ? 'rgba(79,110,247,0.1)' : 'transparent',
-                    border: isActive ? '1px solid rgba(79,110,247,0.2)' : '1px solid transparent',
+                    color: isActive ? '#ffa500' : '#64748b',
+                    background: isActive ? 'rgba(255,165,0,0.1)' : 'transparent',
+                    border: isActive ? '1px solid rgba(255,165,0,0.2)' : '1px solid transparent',
                   })}
                 >
                   <item.icon size={16} />
@@ -111,13 +111,13 @@ export default function Layout() {
         </nav>
 
         {/* User footer */}
-        <div style={{ padding: '16px 16px', borderTop: '1px solid rgba(79,110,247,0.1)' }}>
+        <div style={{ padding: '16px 16px', borderTop: '1px solid rgba(255,165,0,0.1)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
             <div style={{
               width: 34, height: 34, borderRadius: '50%',
-              background: 'linear-gradient(135deg, #4f6ef7, #7c3aed)',
+              background: 'linear-gradient(135deg, #ffa500, #ff6b00)',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 13, fontWeight: 700, color: 'white', flexShrink: 0
+              fontSize: 13, fontWeight: 700, color: '#000', flexShrink: 0
             }}>
               {user?.name?.[0]?.toUpperCase()}
             </div>
@@ -125,7 +125,7 @@ export default function Layout() {
               <div style={{ fontSize: 13, fontWeight: 600, color: '#e2e8f0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {user?.name}
               </div>
-              <div style={{ fontSize: 11, color: '#4f6ef7', fontWeight: 500, textTransform: 'capitalize' }}>
+              <div style={{ fontSize: 11, color: '#ffa500', fontWeight: 500, textTransform: 'capitalize' }}>
                 {user?.role}
               </div>
             </div>

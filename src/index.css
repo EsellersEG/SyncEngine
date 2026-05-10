@@ -4,17 +4,17 @@
   --font-sans: 'Inter', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
 
-  /* Brand Colors */
-  --color-brand-50: #f0f4ff;
-  --color-brand-100: #e0e9ff;
-  --color-brand-200: #c4d3ff;
-  --color-brand-300: #9ab2ff;
-  --color-brand-400: #6b87ff;
-  --color-brand-500: #4f6ef7;
-  --color-brand-600: #3a52e8;
-  --color-brand-700: #2f41c5;
-  --color-brand-800: #27369e;
-  --color-brand-900: #25327c;
+  /* Brand Colors — E-sellers Orange */
+  --color-brand-50: #fff8e6;
+  --color-brand-100: #ffefc0;
+  --color-brand-200: #ffd97a;
+  --color-brand-300: #ffc235;
+  --color-brand-400: #ffb300;
+  --color-brand-500: #ffa500;
+  --color-brand-600: #e69400;
+  --color-brand-700: #cc8300;
+  --color-brand-800: #a36800;
+  --color-brand-900: #7a4e00;
 
   /* Surface Colors (Dark UI) */
   --color-surface-950: #080c18;
@@ -56,7 +56,7 @@ body { min-height: 100vh; }
 .glass-card {
   background: rgba(19, 25, 41, 0.7);
   backdrop-filter: blur(12px);
-  border: 1px solid rgba(79, 110, 247, 0.12);
+  border: 1px solid rgba(255, 165, 0, 0.12);
   border-radius: 16px;
 }
 
@@ -64,14 +64,14 @@ body { min-height: 100vh; }
   transition: all 0.25s ease;
 }
 .glass-card-hover:hover {
-  border-color: rgba(79, 110, 247, 0.35);
+  border-color: rgba(255, 165, 0, 0.35);
   transform: translateY(-2px);
-  box-shadow: 0 8px 32px rgba(79, 110, 247, 0.15);
+  box-shadow: 0 8px 32px rgba(255, 165, 0, 0.15);
 }
 
 /* ── Gradient Text ─────────────────────────────────────────────────────── */
 .gradient-text {
-  background: linear-gradient(135deg, #6b87ff 0%, #a78bfa 100%);
+  background: linear-gradient(135deg, #ffa500 0%, #ff6b00 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -90,7 +90,7 @@ body { min-height: 100vh; }
 .badge-success { background: rgba(34, 197, 94, 0.15); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.3); }
 .badge-warning { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
 .badge-danger  { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
-.badge-info    { background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3); }
+.badge-info    { background: rgba(255, 165, 0, 0.15); color: #ffa500; border: 1px solid rgba(255, 165, 0, 0.3); }
 .badge-muted   { background: rgba(100, 116, 139, 0.15); color: #94a3b8; border: 1px solid rgba(100, 116, 139, 0.2); }
 
 /* ── Buttons ───────────────────────────────────────────────────────────── */
@@ -111,23 +111,23 @@ body { min-height: 100vh; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .btn-primary {
-  background: linear-gradient(135deg, #4f6ef7 0%, #7c3aed 100%);
-  color: white;
-  box-shadow: 0 4px 12px rgba(79, 110, 247, 0.35);
+  background: linear-gradient(135deg, #ffa500 0%, #ff6b00 100%);
+  color: #000;
+  box-shadow: 0 4px 12px rgba(255, 165, 0, 0.35);
 }
 .btn-primary:hover:not(:disabled) {
-  box-shadow: 0 6px 20px rgba(79, 110, 247, 0.5);
+  box-shadow: 0 6px 20px rgba(255, 165, 0, 0.5);
   transform: translateY(-1px);
 }
 
 .btn-secondary {
   background: rgba(45, 61, 88, 0.6);
   color: #cbd5e1;
-  border: 1px solid rgba(79, 110, 247, 0.2);
+  border: 1px solid rgba(255, 165, 0, 0.2);
 }
 .btn-secondary:hover:not(:disabled) {
   background: rgba(45, 61, 88, 0.9);
-  border-color: rgba(79, 110, 247, 0.4);
+  border-color: rgba(255, 165, 0, 0.4);
   color: white;
 }
 
@@ -150,7 +150,7 @@ body { min-height: 100vh; }
   width: 100%;
   padding: 10px 14px;
   background: rgba(13, 18, 36, 0.8);
-  border: 1px solid rgba(79, 110, 247, 0.2);
+  border: 1px solid rgba(255, 165, 0, 0.2);
   border-radius: 10px;
   color: #e2e8f0;
   font-size: 14px;
@@ -160,8 +160,8 @@ body { min-height: 100vh; }
 }
 .input::placeholder { color: #475569; }
 .input:focus {
-  border-color: rgba(79, 110, 247, 0.6);
-  box-shadow: 0 0 0 3px rgba(79, 110, 247, 0.12);
+  border-color: rgba(255, 165, 0, 0.6);
+  box-shadow: 0 0 0 3px rgba(255, 165, 0, 0.12);
 }
 .input-error { border-color: rgba(239, 68, 68, 0.5); }
 
@@ -179,7 +179,7 @@ body { min-height: 100vh; }
 .table-container {
   overflow-x: auto;
   border-radius: 12px;
-  border: 1px solid rgba(79, 110, 247, 0.12);
+  border: 1px solid rgba(255, 165, 0, 0.12);
 }
 .table {
   width: 100%;
@@ -195,15 +195,15 @@ body { min-height: 100vh; }
   color: #64748b;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  border-bottom: 1px solid rgba(79, 110, 247, 0.1);
+  border-bottom: 1px solid rgba(255, 165, 0, 0.1);
 }
 .table td {
   padding: 12px 16px;
-  border-bottom: 1px solid rgba(79, 110, 247, 0.06);
+  border-bottom: 1px solid rgba(255, 165, 0, 0.06);
   color: #cbd5e1;
 }
 .table tbody tr { transition: background 0.15s; }
-.table tbody tr:hover { background: rgba(79, 110, 247, 0.04); }
+.table tbody tr:hover { background: rgba(255, 165, 0, 0.04); }
 .table tbody tr:last-child td { border-bottom: none; }
 
 /* ── Sidebar Layout ────────────────────────────────────────────────────── */
@@ -215,7 +215,7 @@ body { min-height: 100vh; }
   width: 260px;
   flex-shrink: 0;
   background: rgba(8, 12, 24, 0.95);
-  border-right: 1px solid rgba(79, 110, 247, 0.1);
+  border-right: 1px solid rgba(255, 165, 0, 0.1);
   display: flex;
   flex-direction: column;
   position: fixed;
@@ -270,7 +270,7 @@ body { min-height: 100vh; }
 .progress-fill {
   height: 100%;
   border-radius: 3px;
-  background: linear-gradient(90deg, #4f6ef7, #7c3aed);
+  background: linear-gradient(90deg, #ffa500, #ff6b00);
   transition: width 0.5s ease;
 }
 
@@ -288,7 +288,7 @@ body { min-height: 100vh; }
 }
 .modal {
   background: #0d1224;
-  border: 1px solid rgba(79, 110, 247, 0.25);
+  border: 1px solid rgba(255, 165, 0, 0.25);
   border-radius: 24px;
   padding: 32px;
   width: 100%;
@@ -325,8 +325,8 @@ body { min-height: 100vh; }
   to   { opacity: 1; transform: none; }
 }
 @keyframes pulse-glow {
-  0%, 100% { box-shadow: 0 0 8px rgba(79, 110, 247, 0.3); }
-  50%       { box-shadow: 0 0 20px rgba(79, 110, 247, 0.6); }
+  0%, 100% { box-shadow: 0 0 8px rgba(255, 165, 0, 0.3); }
+  50%       { box-shadow: 0 0 20px rgba(255, 165, 0, 0.6); }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
