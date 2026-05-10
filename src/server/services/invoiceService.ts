@@ -1,4 +1,6 @@
-import PDFDocument from 'pdfkit';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const PDFDocument = require('pdfkit');
 
 interface InvoiceItem {
   description: string;
@@ -10,6 +12,10 @@ interface InvoiceItem {
 interface Invoice {
   invoice_number: string;
   client_name: string;
+  client_address?: string | null;
+  client_phone?: string | null;
+  client_email?: string | null;
+  client_tax_id?: string | null;
   status: string;
   issue_date: string;
   due_date: string | null;
@@ -93,8 +99,27 @@ export async function generateInvoicePDF(
     doc.font('Helvetica-Bold').fontSize(12).fillColor('#333')
       .text(invoice.client_name, 350, metaY + 14, { width: 200, align: 'right' });
 
+    let billToY = metaY + 30;
+    doc.font('Helvetica').fontSize(9).fillColor('#555');
+    if (invoice.client_address) {
+      doc.text(invoice.client_address, 350, billToY, { width: 200, align: 'right' });
+      billToY += 13;
+    }
+    if (invoice.client_phone) {
+      doc.text(invoice.client_phone, 350, billToY, { width: 200, align: 'right' });
+      billToY += 13;
+    }
+    if (invoice.client_email) {
+      doc.text(invoice.client_email, 350, billToY, { width: 200, align: 'right' });
+      billToY += 13;
+    }
+    if (invoice.client_tax_id) {
+      doc.text(`Tax ID: ${invoice.client_tax_id}`, 350, billToY, { width: 200, align: 'right' });
+      billToY += 13;
+    }
+
     // ── Line Items Table ────────────────────────────────────────────────
-    const tableTop = metaY + 70;
+    const tableTop = Math.max(metaY + 70, billToY + 15);
     const colX = { desc: 50, qty: 320, price: 390, total: 470 };
 
     // Table header

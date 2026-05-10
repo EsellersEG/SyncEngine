@@ -11,6 +11,10 @@ interface Client {
   slug: string;
   logo_url: string | null;
   is_active: boolean;
+  address?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  tax_id?: string | null;
   feed_count: string;
   channel_count: string;
   created_at: string;
@@ -26,7 +30,7 @@ export default function ClientsPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [editClient, setEditClient] = useState<Client | null>(null);
-  const [editForm, setEditForm] = useState({ name: '', is_active: true });
+  const [editForm, setEditForm] = useState({ name: '', is_active: true, address: '', phone: '', email: '', tax_id: '' });
 
   useEffect(() => {
     api.get('/clients').then((data: Client[]) => setClients(data))
@@ -134,7 +138,7 @@ export default function ClientsPage() {
                   {isAdmin && (
                     <button className="btn btn-secondary btn-sm btn-icon" title="Edit" onClick={() => {
                       setEditClient(client);
-                      setEditForm({ name: client.name, is_active: client.is_active });
+                      setEditForm({ name: client.name, is_active: client.is_active, address: client.address || '', phone: client.phone || '', email: client.email || '', tax_id: client.tax_id || '' });
                     }}>
                       <Pencil size={13} />
                     </button>
@@ -169,6 +173,31 @@ export default function ClientsPage() {
                 <label className="label">Client Name</label>
                 <input className="input" value={editForm.name}
                   onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))} required autoFocus />
+              </div>
+              <div style={{ borderTop: '1px solid rgba(255,165,0,0.1)', paddingTop: 16 }}>
+                <div style={{ fontSize: 12, color: '#64748b', fontWeight: 600, marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Billing Information (for invoices)</div>
+                <div className="form-group">
+                  <label className="label">Address</label>
+                  <textarea className="input" rows={2} placeholder="Street, City, Country" value={editForm.address}
+                    onChange={e => setEditForm(f => ({ ...f, address: e.target.value }))} />
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                  <div className="form-group">
+                    <label className="label">Phone</label>
+                    <input className="input" placeholder="+20 xxx xxx xxxx" value={editForm.phone}
+                      onChange={e => setEditForm(f => ({ ...f, phone: e.target.value }))} />
+                  </div>
+                  <div className="form-group">
+                    <label className="label">Email</label>
+                    <input className="input" type="email" placeholder="billing@company.com" value={editForm.email}
+                      onChange={e => setEditForm(f => ({ ...f, email: e.target.value }))} />
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label className="label">Tax ID</label>
+                  <input className="input" placeholder="Tax registration number" value={editForm.tax_id}
+                    onChange={e => setEditForm(f => ({ ...f, tax_id: e.target.value }))} />
+                </div>
               </div>
               <div className="form-group">
                 <label className="label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

@@ -80,15 +80,19 @@ router.post('/', requireAdmin, async (req: AuthRequest, res) => {
 // PATCH /api/clients/:id
 router.patch('/:id', requireAdmin, async (req, res) => {
   try {
-    const { name, logo_url, is_active } = req.body;
+    const { name, logo_url, is_active, address, phone, email, tax_id } = req.body;
     const result = await query(
       `UPDATE clients SET
         name = COALESCE($1, name),
         logo_url = COALESCE($2, logo_url),
         is_active = COALESCE($3, is_active),
+        address = COALESCE($4, address),
+        phone = COALESCE($5, phone),
+        email = COALESCE($6, email),
+        tax_id = COALESCE($7, tax_id),
         updated_at = NOW()
-       WHERE id = $4 RETURNING *`,
-      [name, logo_url, is_active, req.params.id]
+       WHERE id = $8 RETURNING *`,
+      [name, logo_url, is_active, address ?? null, phone ?? null, email ?? null, tax_id ?? null, req.params.id]
     );
     if (!result.rows[0]) return res.status(404).json({ error: 'Client not found' });
     return res.json(result.rows[0]);

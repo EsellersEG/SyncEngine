@@ -108,6 +108,14 @@ router.post('/', requireAdmin, async (req: AuthRequest, res) => {
       return res.status(400).json({ error: 'client_id and at least one item required' });
     }
 
+    // Verify client has billing info
+    const clientResult = await query('SELECT name, address, phone, email FROM clients WHERE id = $1', [client_id]);
+    if (!clientResult.rows[0]) return res.status(404).json({ error: 'Client not found' });
+    const client = clientResult.rows[0];
+    if (!client.address && !client.email && !client.phone) {
+      return res.status(400).json({ error: 'Client must have billing information (address, email, or phone). Please update the client profile first.' });
+    }
+
     // Generate invoice number
     const countResult = await query('SELECT COUNT(*) as cnt FROM invoices');
     const invoiceNumber = `INV-${String(parseInt(countResult.rows[0].cnt) + 1).padStart(4, '0')}`;
@@ -222,7 +230,8 @@ router.delete('/:id', requireAdmin, async (req, res) => {
 router.get('/:id/pdf', requireAdmin, async (req: AuthRequest, res) => {
   try {
     const invoiceResult = await query(
-      `SELECT i.*, c.name as client_name FROM invoices i JOIN clients c ON c.id = i.client_id WHERE i.id = $1`,
+      `SELECT i.*, c.name as client_name, c.address as client_address, c.phone as client_phone, c.email as client_email, c.tax_id as client_tax_id
+       FROM invoices i JOIN clients c ON c.id = i.client_id WHERE i.id = $1`,
       [req.params.id]
     );
     if (!invoiceResult.rows[0]) return res.status(404).json({ error: 'Invoice not found' });
