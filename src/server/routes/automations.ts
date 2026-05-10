@@ -1,13 +1,14 @@
 import { Router } from 'express';
 import { query } from '../db.js';
-import { authenticate } from '../middleware/auth.js';
+import { authenticate, type AuthRequest } from '../middleware/auth.js';
 
 const router = Router();
 router.use(authenticate);
 
 // GET /api/automations
-router.get('/', async (_req, res) => {
+router.get('/', async (req: AuthRequest, res) => {
   try {
+    const isAdmin = req.user!.role === 'admin';
     const result = await query(
       `SELECT a.*,
         c.name as client_name,
@@ -18,7 +19,9 @@ router.get('/', async (_req, res) => {
        LEFT JOIN clients c ON a.client_id = c.id
        LEFT JOIN feeds f ON a.feed_id = f.id
        LEFT JOIN channels ch ON a.channel_id = ch.id
-       ORDER BY a.created_at DESC`
+       ${isAdmin ? '' : 'JOIN user_clients uc ON uc.client_id = a.client_id AND uc.user_id = $1'}
+       ORDER BY a.created_at DESC`,
+      isAdmin ? [] : [req.user!.id]
     );
     return res.json(result.rows);
   } catch (err) {

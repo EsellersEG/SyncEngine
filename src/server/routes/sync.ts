@@ -118,9 +118,10 @@ router.post('/start', async (req: AuthRequest, res) => {
 });
 
 // GET /api/sync/jobs?channel_id=xxx&feed_id=xxx
-router.get('/jobs', async (req, res) => {
+router.get('/jobs', async (req: AuthRequest, res) => {
   try {
     const { channel_id, feed_id, limit = '20' } = req.query;
+    const isAdmin = req.user!.role === 'admin';
     const result = await query(
       `SELECT sj.id, sj.channel_id, sj.feed_id, sj.triggered_by, sj.preset, sj.fields,
               sj.status, sj.total_products, sj.created_count, sj.updated_count,
@@ -130,11 +131,14 @@ router.get('/jobs', async (req, res) => {
        FROM sync_jobs sj
        LEFT JOIN users u ON sj.triggered_by = u.id
        LEFT JOIN channels ch ON sj.channel_id = ch.id
+       ${isAdmin ? '' : 'JOIN user_clients uc ON uc.client_id = ch.client_id AND uc.user_id = $4'}
        WHERE ($1::uuid IS NULL OR sj.channel_id = $1::uuid)
          AND ($2::uuid IS NULL OR sj.feed_id = $2::uuid)
        ORDER BY sj.created_at DESC
        LIMIT $3`,
-      [channel_id || null, feed_id || null, parseInt(limit as string)]
+      isAdmin
+        ? [channel_id || null, feed_id || null, parseInt(limit as string)]
+        : [channel_id || null, feed_id || null, parseInt(limit as string), req.user!.id]
     );
     return res.json(result.rows);
   } catch (err) {

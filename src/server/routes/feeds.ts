@@ -10,13 +10,15 @@ router.use(authenticate);
 router.get('/', async (req: AuthRequest, res) => {
   try {
     const { client_id } = req.query;
+    const isAdmin = req.user!.role === 'admin';
     const result = await query(
       `SELECT f.*, 
         (SELECT COUNT(*) FROM products p WHERE p.feed_id = f.id) as product_count
        FROM feeds f
+       ${isAdmin ? '' : 'JOIN user_clients uc ON uc.client_id = f.client_id AND uc.user_id = $2'}
        WHERE ($1::uuid IS NULL OR f.client_id = $1::uuid)
        ORDER BY f.created_at DESC`,
-      [client_id || null]
+      isAdmin ? [client_id || null] : [client_id || null, req.user!.id]
     );
     return res.json(result.rows);
   } catch (err) {

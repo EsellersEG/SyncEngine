@@ -1,22 +1,24 @@
 import { Router } from 'express';
 import { query } from '../db.js';
-import { authenticate } from '../middleware/auth.js';
+import { authenticate, type AuthRequest } from '../middleware/auth.js';
 
 const router = Router();
 router.use(authenticate);
 
 // GET /api/channels?client_id=xxx
-router.get('/', async (req, res) => {
+router.get('/', async (req: AuthRequest, res) => {
   try {
     const { client_id } = req.query;
+    const isAdmin = req.user!.role === 'admin';
     const result = await query(
       `SELECT ch.*,
         (SELECT COUNT(*) FROM sync_jobs sj WHERE sj.channel_id = ch.id) as total_syncs,
         (SELECT MAX(sj.completed_at) FROM sync_jobs sj WHERE sj.channel_id = ch.id AND sj.status = 'completed') as last_synced_at
        FROM channels ch
+       ${isAdmin ? '' : 'JOIN user_clients uc ON uc.client_id = ch.client_id AND uc.user_id = $2'}
        WHERE ($1::uuid IS NULL OR ch.client_id = $1::uuid)
        ORDER BY ch.created_at DESC`,
-      [client_id || null]
+      isAdmin ? [client_id || null] : [client_id || null, req.user!.id]
     );
     // Mask tokens in response
     const masked = result.rows.map(ch => ({
