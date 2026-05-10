@@ -11,7 +11,7 @@
     "dev:client": "vite",
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
     "build": "vite build",
-    "build:server": "esbuild server.ts --bundle --platform=node --format=esm --outfile=dist/server.js --external:express --external:pg --external:dotenv --external:cors --external:googleapis --external:bcryptjs --external:jsonwebtoken --external:crypto-js",
+    "build:server": "esbuild server.ts --bundle --platform=node --format=esm --outfile=dist/server.js --external:express --external:pg --external:dotenv --external:cors --external:googleapis --external:bcryptjs --external:jsonwebtoken --external:crypto-js --external:pdfkit",
     "build:all": "npm run build && npm run build:server",
     "start": "npm run db:init && node dist/server.js",
     "db:init": "node scripts/initDb.js"
@@ -35,6 +35,7 @@
     "googleapis": "^171.4.0",
     "jsonwebtoken": "^9.0.3",
     "lucide-react": "^0.474.0",
+    "pdfkit": "^0.18.0",
     "pg": "^8.20.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

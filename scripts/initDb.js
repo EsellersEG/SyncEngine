@@ -104,6 +104,37 @@ async function init() {
         channel_id UUID REFERENCES channels(id) ON DELETE CASCADE,
         PRIMARY KEY (user_id, channel_id)
       )`,
+      `CREATE TABLE IF NOT EXISTS invoices (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        client_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+        invoice_number VARCHAR(50) NOT NULL UNIQUE,
+        status VARCHAR(20) NOT NULL DEFAULT 'draft',
+        issue_date DATE NOT NULL DEFAULT CURRENT_DATE,
+        due_date DATE,
+        currency VARCHAR(10) NOT NULL DEFAULT 'EGP',
+        subtotal DECIMAL(12,2) NOT NULL DEFAULT 0,
+        tax_percent DECIMAL(5,2) NOT NULL DEFAULT 0,
+        tax_amount DECIMAL(12,2) NOT NULL DEFAULT 0,
+        total DECIMAL(12,2) NOT NULL DEFAULT 0,
+        notes TEXT,
+        paid_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )`,
+      `CREATE TABLE IF NOT EXISTS invoice_items (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        invoice_id UUID NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+        description TEXT NOT NULL,
+        quantity DECIMAL(10,2) NOT NULL DEFAULT 1,
+        unit_price DECIMAL(12,2) NOT NULL DEFAULT 0,
+        total DECIMAL(12,2) NOT NULL DEFAULT 0,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )`,
+      `CREATE TABLE IF NOT EXISTS settings (
+        key VARCHAR(100) PRIMARY KEY,
+        value TEXT NOT NULL DEFAULT '',
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )`,
     ];
     for (const sql of migrations) {
       await client.query(sql);

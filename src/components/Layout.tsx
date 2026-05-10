@@ -2,7 +2,7 @@ import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import {
   LayoutDashboard, Users, Database, Zap, Settings,
-  GitBranch, ShoppingBag, Map, Package, LogOut, Activity
+  GitBranch, ShoppingBag, Map, Package, LogOut, Activity, FileText
 } from 'lucide-react';
 
 const navItems = [
@@ -15,6 +15,7 @@ const navItems = [
   { to: '/automations', icon: Activity, label: 'Automations' },
   { to: '/sync', icon: Zap, label: 'Sync Jobs' },
   { to: '/orders', icon: ShoppingBag, label: 'Orders' },
+  { to: '/invoices', icon: FileText, label: 'Invoices' },
 ];
 
 const adminItems = [
