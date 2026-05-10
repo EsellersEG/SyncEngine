@@ -11,6 +11,7 @@ export interface OdooConfig {
   apiKey: string;     // API key or password
   productSearchBy?: 'automatic' | 'sku' | 'ean' | 'name';
   warehouseId?: number; // Odoo warehouse ID to scope qty_available
+  orderTaxIncludedPercent?: number; // If set, Shopify prices include this tax % — deduct before sending to Odoo
 }
 
 interface FeedRow {
@@ -432,7 +433,12 @@ export async function createOdooSaleOrder(
     }
 
     const discount = item.discount_allocations?.reduce((sum, d) => sum + parseFloat(d.amount || '0'), 0) || 0;
-    const priceUnit = parseFloat(item.price);
+    let priceUnit = parseFloat(item.price);
+    // Deduct included tax so Odoo can add it back
+    if (config.orderTaxIncludedPercent && config.orderTaxIncludedPercent > 0) {
+      priceUnit = priceUnit / (1 + config.orderTaxIncludedPercent / 100);
+      priceUnit = Math.round(priceUnit * 10000) / 10000;
+    }
     const discountPercent = priceUnit > 0 ? (discount / (priceUnit * item.quantity)) * 100 : 0;
 
     orderLines.push([0, 0, {

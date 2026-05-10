@@ -12,6 +12,7 @@ interface Feed {
   odoo_search_by?: 'automatic' | 'sku' | 'ean' | 'name';
   odoo_warehouse_id?: number | null;
   odoo_warehouse_name?: string | null;
+  order_tax_included_percent?: number | null;
   sync_interval_minutes?: number | null;
 }
 interface Client { id: string; name: string; }
@@ -36,6 +37,7 @@ export default function FeedsPage() {
     odoo_search_by: 'automatic' as 'automatic' | 'sku' | 'ean' | 'name',
     odoo_warehouse_id: '',
     odoo_warehouse_name: '',
+    order_tax_included_percent: '',
     sync_interval_minutes: '',
   });
   const [error, setError] = useState('');
@@ -76,6 +78,7 @@ export default function FeedsPage() {
         payload.odoo_search_by = form.odoo_search_by;
         payload.odoo_warehouse_id = form.odoo_warehouse_id || null;
         payload.odoo_warehouse_name = form.odoo_warehouse_name || null;
+        payload.order_tax_included_percent = form.order_tax_included_percent || null;
       }
 
       if (editingFeed) {
@@ -172,7 +175,7 @@ export default function FeedsPage() {
 
   function openCreateModal() {
     setEditingFeed(null);
-    setForm({ client_id: clientId || '', name: '', type: 'google_sheets', spreadsheet_id: '', sheet_name: 'Sheet1', header_row: 1, odoo_url: '', odoo_database: '', odoo_username: '', odoo_api_key: '', odoo_search_by: 'automatic', odoo_warehouse_id: '', odoo_warehouse_name: '', sync_interval_minutes: '' });
+    setForm({ client_id: clientId || '', name: '', type: 'google_sheets', spreadsheet_id: '', sheet_name: 'Sheet1', header_row: 1, odoo_url: '', odoo_database: '', odoo_username: '', odoo_api_key: '', odoo_search_by: 'automatic', odoo_warehouse_id: '', odoo_warehouse_name: '', order_tax_included_percent: '', sync_interval_minutes: '' });
     setError('');
     setTestResult(null);
     setShowModal(true);
@@ -269,6 +272,7 @@ export default function FeedsPage() {
                             odoo_search_by: feed.odoo_search_by || 'automatic',
                             odoo_warehouse_id: feed.odoo_warehouse_id ? String(feed.odoo_warehouse_id) : '',
                             odoo_warehouse_name: feed.odoo_warehouse_name || '',
+                            order_tax_included_percent: feed.order_tax_included_percent ? String(feed.order_tax_included_percent) : '',
                             sync_interval_minutes: feed.sync_interval_minutes ? String(feed.sync_interval_minutes) : '',
                           });
                           setError('');
@@ -435,6 +439,15 @@ export default function FeedsPage() {
                         {loadingWarehouses ? 'Loading warehouses...' : 'Click "Test Connection" to load warehouses'}
                       </span>
                     )}
+                  </div>
+                  <div className="form-group">
+                    <label className="label">Order Prices Include Tax %</label>
+                    <input className="input" type="number" min="0" step="0.01" placeholder="e.g. 14"
+                      value={form.order_tax_included_percent}
+                      onChange={e => setForm(f => ({ ...f, order_tax_included_percent: e.target.value }))} />
+                    <span style={{ fontSize: 11, color: '#64748b' }}>
+                      If Shopify prices include VAT, enter the rate (e.g. 14). Orders sent to Odoo will have this % deducted so Odoo can add its own tax.
+                    </span>
                   </div>
                   <button type="button" className="btn btn-secondary btn-sm" onClick={handleTestOdoo} disabled={testing || !form.odoo_url || !form.odoo_database || !form.odoo_username || (!form.odoo_api_key && !editingFeed?.odoo_api_key)}>
                     {testing ? <><Loader2 size={12} className="spinner" /> Testing...</> : <><CheckCircle size={12} /> Test Connection</>}

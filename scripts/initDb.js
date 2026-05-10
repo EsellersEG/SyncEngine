@@ -93,6 +93,7 @@ async function init() {
       `ALTER TABLE orders ADD COLUMN IF NOT EXISTS odoo_order_name VARCHAR(100)`,
       `ALTER TABLE feeds ADD COLUMN IF NOT EXISTS odoo_warehouse_id INT`,
       `ALTER TABLE feeds ADD COLUMN IF NOT EXISTS odoo_warehouse_name TEXT`,
+      `ALTER TABLE feeds ADD COLUMN IF NOT EXISTS order_tax_included_percent DECIMAL(5,2)`,
       `CREATE TABLE IF NOT EXISTS user_feeds (
         user_id UUID REFERENCES users(id) ON DELETE CASCADE,
         feed_id UUID REFERENCES feeds(id) ON DELETE CASCADE,
