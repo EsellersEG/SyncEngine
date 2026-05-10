@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { api } from '../lib/api';
+import Modal from '../components/Modal';
 import { Package, Search, RefreshCw, X } from 'lucide-react';
 
 interface Product {
@@ -181,8 +182,7 @@ export default function ProductsPage() {
 
     {/* Product Detail Modal */}
     {selectedProduct && (
-      <div className="modal-backdrop" onClick={() => setSelectedProduct(null)}>
-        <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 640 }}>
+      <Modal open={true} onClose={() => setSelectedProduct(null)} maxWidth={640}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
             <div>
               <h2 style={{ fontSize: 18, fontWeight: 700, color: '#e2e8f0', marginBottom: 4 }}>Product Details</h2>
@@ -221,8 +221,7 @@ export default function ProductsPage() {
           <div style={{ marginTop: 16, fontSize: 11, color: '#475569' }}>
             Last updated: {new Date(selectedProduct.last_updated_at).toLocaleString()}
           </div>
-        </div>
-      </div>
+      </Modal>
     )}
     </>
   );

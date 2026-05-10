@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
+import Modal from '../components/Modal';
 import { ShoppingBag, RefreshCw, CheckCircle, Clock, XCircle, ExternalLink, X, Package, Download } from 'lucide-react';
 
 interface LineItem {
@@ -232,15 +233,7 @@ export default function OrdersPage() {
 
       {/* ── Order Detail Modal ─────────────────────────────────────────── */}
       {selectedOrder && (
-        <div
-          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}
-          onClick={() => setSelectedOrder(null)}
-        >
-          <div
-            className="glass-card"
-            style={{ width: '100%', maxWidth: 660, maxHeight: '90vh', overflow: 'auto', padding: 28 }}
-            onClick={e => e.stopPropagation()}
-          >
+        <Modal open={true} onClose={() => setSelectedOrder(null)} maxWidth={660} style={{ padding: 28 }}>
             {/* Header */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
               <div>
@@ -372,8 +365,7 @@ export default function OrdersPage() {
                 </>
               );
             })()}
-          </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

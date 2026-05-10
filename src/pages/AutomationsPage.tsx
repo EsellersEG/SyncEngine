@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
+import Modal from '../components/Modal';
 import { Plus, Trash2, Activity, Play, Pause, Pencil } from 'lucide-react';
 
 interface Automation {
@@ -243,9 +244,7 @@ export default function AutomationsPage() {
       </div>
     </div>
 
-    {showModal && (
-      <div className="modal-overlay" onClick={() => setShowModal(false)}>
-        <div className="modal" onClick={e => e.stopPropagation()}>
+    <Modal open={showModal} onClose={() => setShowModal(false)}>
           <h2 style={{ fontSize: 18, fontWeight: 700, color: '#e2e8f0', marginBottom: 16 }}>{editingAutomationId ? 'Edit Automation' : 'New Automation'}</h2>
           {error && <div className="alert alert-danger" style={{ marginBottom: 12 }}>{error}</div>}
           <form onSubmit={handleSubmit}>
@@ -329,9 +328,7 @@ export default function AutomationsPage() {
               <button className="btn btn-secondary" type="button" onClick={() => { setShowModal(false); resetForm(); }}>Cancel</button>
             </div>
           </form>
-        </div>
-      </div>
-    )}
+    </Modal>
     </>
   );
 }

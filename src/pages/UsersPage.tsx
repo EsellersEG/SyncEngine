@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
+import Modal from '../components/Modal';
 import { useAuth } from '../hooks/useAuth';
 import { Plus, UserCheck, Shield, Eye, Pencil, X } from 'lucide-react';
 interface User {
@@ -176,9 +177,7 @@ export default function UsersPage() {
       </div>
 
       {/* ── Create Modal ── */}
-      {showCreate && (
-        <div className="modal-backdrop" onClick={() => setShowCreate(false)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
+      <Modal open={showCreate} onClose={() => setShowCreate(false)}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
               <h2 style={{ fontSize: 18, fontWeight: 700, color: '#e2e8f0' }}>Create User</h2>
               <button className="btn btn-secondary btn-sm" onClick={() => setShowCreate(false)}><X size={14} /></button>
@@ -213,14 +212,11 @@ export default function UsersPage() {
                 <button type="submit" className="btn btn-primary" style={{ flex: 1 }} disabled={creating}>{creating ? 'Creating...' : 'Create User'}</button>
               </div>
             </form>
-          </div>
-        </div>
-      )}
+      </Modal>
 
       {/* ── Edit Modal ── */}
       {editUser && (
-        <div className="modal-backdrop" onClick={() => setEditUser(null)}>
-          <div className="modal" style={{ maxWidth: 560 }} onClick={e => e.stopPropagation()}>
+        <Modal open={true} onClose={() => setEditUser(null)} maxWidth={560}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
               <div>
                 <h2 style={{ fontSize: 18, fontWeight: 700, color: '#e2e8f0' }}>Edit User</h2>
@@ -308,8 +304,7 @@ export default function UsersPage() {
                 <button type="submit" className="btn btn-primary" style={{ flex: 1 }} disabled={editSaving}>{editSaving ? 'Saving...' : 'Save Changes'}</button>
               </div>
             </form>
-          </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

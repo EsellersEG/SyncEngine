@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
+import Modal from '../components/Modal';
 import { useAuth } from '../hooks/useAuth';
 import { Plus, Users, Database, GitBranch, ExternalLink, Pencil } from 'lucide-react';
 
@@ -147,8 +148,7 @@ export default function ClientsPage() {
 
       {/* Edit Modal */}
       {editClient && (
-        <div className="modal-backdrop" onClick={() => setEditClient(null)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
+        <Modal open={true} onClose={() => setEditClient(null)}>
             <h2 style={{ fontSize: 18, fontWeight: 700, color: '#e2e8f0', marginBottom: 6 }}>Edit Client</h2>
             <p style={{ fontSize: 13, color: '#64748b', marginBottom: 24 }}>Update client profile</p>
             <form onSubmit={async (e) => {
@@ -185,14 +185,11 @@ export default function ClientsPage() {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* Create Modal */}
-      {showModal && (
-        <div className="modal-backdrop" onClick={() => setShowModal(false)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
+      <Modal open={showModal} onClose={() => setShowModal(false)}>
             <h2 style={{ fontSize: 18, fontWeight: 700, color: '#e2e8f0', marginBottom: 6 }}>Create New Client</h2>
             <p style={{ fontSize: 13, color: '#64748b', marginBottom: 24 }}>Set up a new client profile</p>
 
@@ -218,9 +215,7 @@ export default function ClientsPage() {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
-      )}
+      </Modal>
     </div>
   );
 }

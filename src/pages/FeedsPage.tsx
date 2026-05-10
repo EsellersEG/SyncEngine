@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
+import Modal from '../components/Modal';
 import { Plus, Database, RefreshCw, Trash2, AlertCircle, Pencil, CheckCircle, Loader2 } from 'lucide-react';
 
 interface Feed {
@@ -311,9 +312,7 @@ export default function FeedsPage() {
       </div>
       </div>
 
-      {showModal && (
-        <div className="modal-backdrop" onClick={() => setShowModal(false)}>
-          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 540 }}>
+      <Modal open={showModal} onClose={() => setShowModal(false)} maxWidth={540}>
             <h2 style={{ fontSize: 18, fontWeight: 700, color: '#e2e8f0', marginBottom: 6 }}>{editingFeed ? 'Edit Feed' : 'Add Feed'}</h2>
             <p style={{ fontSize: 13, color: '#64748b', marginBottom: 24 }}>Connect a product source for synchronization</p>
             <form onSubmit={handleCreate} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -472,9 +471,7 @@ export default function FeedsPage() {
                 <button type="submit" className="btn btn-primary" style={{ flex: 1 }}>{editingFeed ? 'Save Changes' : 'Add Feed'}</button>
               </div>
             </form>
-          </div>
-        </div>
-      )}
+      </Modal>
     </>
   );
 }

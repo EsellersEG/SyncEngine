@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
+import Modal from '../components/Modal';
 import { Plus, GitBranch, Trash2, CheckCircle, XCircle, Loader, Pencil } from 'lucide-react';
 
 interface Channel {
@@ -226,8 +227,7 @@ export default function ChannelsPage() {
 
       {/* Edit Modal */}
       {editChannel && (
-        <div className="modal-backdrop" onClick={() => setEditChannel(null)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
+        <Modal open={true} onClose={() => setEditChannel(null)}>
             <h2 style={{ fontSize: 18, fontWeight: 700, color: '#e2e8f0', marginBottom: 6 }}>Edit Channel</h2>
             <p style={{ fontSize: 13, color: '#64748b', marginBottom: 24 }}>Update {editChannel.name}</p>
             <form onSubmit={handleEdit} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -289,13 +289,10 @@ export default function ChannelsPage() {
                 <button type="submit" className="btn btn-primary" style={{ flex: 1 }}>Save Changes</button>
               </div>
             </form>
-          </div>
-        </div>
+        </Modal>
       )}
 
-      {showModal && (
-        <div className="modal-backdrop" onClick={() => setShowModal(false)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
+      <Modal open={showModal} onClose={() => setShowModal(false)}>
             <h2 style={{ fontSize: 18, fontWeight: 700, color: '#e2e8f0', marginBottom: 6 }}>Add Channel</h2>
             <p style={{ fontSize: 13, color: '#64748b', marginBottom: 24 }}>Connect a Shopify store or marketplace</p>
             <form onSubmit={handleCreate} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -358,9 +355,7 @@ export default function ChannelsPage() {
                 <button type="submit" className="btn btn-primary" style={{ flex: 1 }}>Add Channel</button>
               </div>
             </form>
-          </div>
-        </div>
-      )}
+      </Modal>
     </div>
   );
 }
