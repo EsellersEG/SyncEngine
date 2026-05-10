@@ -1,7 +1,8 @@
 import { useEffect, useState, useCallback } from 'react';
 import { api } from '../lib/api';
+import { useAuth } from '../hooks/useAuth';
 import Modal from '../components/Modal';
-import { Package, Search, RefreshCw, X } from 'lucide-react';
+import { Package, Search, RefreshCw, X, Trash2 } from 'lucide-react';
 
 interface Product {
   id: string; sku: string; feed_name: string; status: string;
@@ -12,6 +13,7 @@ interface Client { id: string; name: string; }
 interface Feed { id: string; name: string; }
 
 export default function ProductsPage() {
+  const { isAdmin } = useAuth();
   const [products, setProducts] = useState<Product[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [feeds, setFeeds] = useState<Feed[]>([]);
@@ -23,6 +25,7 @@ export default function ProductsPage() {
   const [feedFilter, setFeedFilter] = useState('');
   const [loading, setLoading] = useState(true);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const limit = 50;
 
   useEffect(() => {
@@ -58,6 +61,36 @@ export default function ProductsPage() {
   }, [page, debouncedSearch, clientFilter, feedFilter]);
 
   useEffect(() => { fetchProducts(); }, [fetchProducts]);
+
+  async function handleDeleteProduct(id: string, sku: string) {
+    if (!confirm(`Delete product ${sku}? This only removes it from the database, not from Shopify.`)) return;
+    try {
+      await api.delete(`/products/${id}`);
+      setProducts(prev => prev.filter(p => p.id !== id));
+      setTotal(prev => prev - 1);
+      if (selectedProduct?.id === id) setSelectedProduct(null);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to delete');
+    }
+  }
+
+  async function handleBulkDelete() {
+    const filterDesc = feedFilter ? feeds.find(f => f.id === feedFilter)?.name : clientFilter ? clients.find(c => c.id === clientFilter)?.name : debouncedSearch ? `search "${debouncedSearch}"` : '';
+    if (!filterDesc) { alert('Select a feed, client, or search term first to bulk delete.'); return; }
+    if (!confirm(`Delete all ${total.toLocaleString()} products matching "${filterDesc}"? This only removes them from the database, not from Shopify.`)) return;
+    setDeleting(true);
+    try {
+      const params = new URLSearchParams();
+      if (feedFilter) params.set('feed_id', feedFilter);
+      if (clientFilter) params.set('client_id', clientFilter);
+      if (debouncedSearch) params.set('search', debouncedSearch);
+      const result = await api.delete(`/products?${params}`) as { deleted: number };
+      alert(`Deleted ${result.deleted} products.`);
+      fetchProducts();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to delete');
+    } finally { setDeleting(false); }
+  }
 
   const totalPages = Math.ceil(total / limit);
 
@@ -101,6 +134,11 @@ export default function ProductsPage() {
           <button className="btn btn-secondary btn-sm btn-icon" onClick={fetchProducts} title="Refresh">
             <RefreshCw size={14} className={loading ? 'spinner' : ''} />
           </button>
+          {isAdmin && (feedFilter || clientFilter || debouncedSearch) && (
+            <button className="btn btn-danger btn-sm" onClick={handleBulkDelete} disabled={deleting || total === 0}>
+              <Trash2 size={13} /> Delete {total.toLocaleString()}
+            </button>
+          )}
         </div>
       </div>
 
@@ -130,6 +168,7 @@ export default function ProductsPage() {
                     <th>Status</th>
                     <th>Fingerprint</th>
                     <th>Last Updated</th>
+                    {isAdmin && <th style={{ width: 50 }}></th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -154,6 +193,13 @@ export default function ProductsPage() {
                       <td style={{ fontSize: 13, color: '#64748b' }}>
                         {new Date(product.last_updated_at).toLocaleString()}
                       </td>
+                      {isAdmin && (
+                        <td>
+                          <button className="btn btn-danger btn-sm btn-icon" title="Delete" onClick={e => { e.stopPropagation(); handleDeleteProduct(product.id, product.sku); }}>
+                            <Trash2 size={12} />
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -218,8 +264,13 @@ export default function ProductsPage() {
               </tbody>
             </table>
           </div>
-          <div style={{ marginTop: 16, fontSize: 11, color: '#475569' }}>
-            Last updated: {new Date(selectedProduct.last_updated_at).toLocaleString()}
+          <div style={{ marginTop: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: 11, color: '#475569' }}>Last updated: {new Date(selectedProduct.last_updated_at).toLocaleString()}</span>
+            {isAdmin && (
+              <button className="btn btn-danger btn-sm" onClick={() => handleDeleteProduct(selectedProduct.id, selectedProduct.sku)}>
+                <Trash2 size={12} /> Delete Product
+              </button>
+            )}
           </div>
       </Modal>
     )}

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { query } from '../db.js';
-import { authenticate, type AuthRequest } from '../middleware/auth.js';
+import { authenticate, requireAdmin, type AuthRequest } from '../middleware/auth.js';
 
 const router = Router();
 router.use(authenticate);
@@ -60,6 +60,39 @@ router.get('/:id', async (req, res) => {
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Failed to fetch product' });
+  }
+});
+
+// DELETE /api/products/:id — delete a single product
+router.delete('/:id', requireAdmin, async (req, res) => {
+  try {
+    const result = await query('DELETE FROM products WHERE id = $1 RETURNING id, sku', [req.params.id]);
+    if (!result.rows[0]) return res.status(404).json({ error: 'Product not found' });
+    return res.json({ success: true, deleted: 1 });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to delete product' });
+  }
+});
+
+// DELETE /api/products — bulk delete by feed_id, client_id, or search
+router.delete('/', requireAdmin, async (req: AuthRequest, res) => {
+  try {
+    const { feed_id, client_id, search } = req.query;
+    if (!feed_id && !client_id && !search) {
+      return res.status(400).json({ error: 'At least one filter (feed_id, client_id, or search) is required' });
+    }
+    const result = await query(
+      `DELETE FROM products
+       WHERE ($1::uuid IS NULL OR feed_id = $1::uuid)
+         AND ($2::uuid IS NULL OR client_id = $2::uuid)
+         AND ($3::text IS NULL OR sku ILIKE '%' || $3 || '%')`,
+      [feed_id || null, client_id || null, search || null]
+    );
+    return res.json({ success: true, deleted: result.rowCount });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to delete products' });
   }
 });
 
