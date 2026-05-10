@@ -6,16 +6,14 @@ import { authenticate, requireAdmin, type AuthRequest } from '../middleware/auth
 const router = Router();
 router.use(authenticate);
 
-// GET /api/users — list all users with their assignment counts
+// GET /api/users — list all users with their assigned client count
 router.get('/', requireAdmin, async (_req, res) => {
   try {
     const result = await query(
       `SELECT u.id, u.email, u.name, u.role, u.is_active, u.created_at,
-              COUNT(DISTINCT uf.feed_id) AS feed_count,
-              COUNT(DISTINCT uc.channel_id) AS channel_count
+              COUNT(DISTINCT uc.client_id) AS client_count
        FROM users u
-       LEFT JOIN user_feeds uf ON uf.user_id = u.id
-       LEFT JOIN user_channels uc ON uc.user_id = u.id
+       LEFT JOIN user_clients uc ON uc.user_id = u.id
        GROUP BY u.id
        ORDER BY u.created_at DESC`
     );
@@ -26,16 +24,12 @@ router.get('/', requireAdmin, async (_req, res) => {
   }
 });
 
-// GET /api/users/:id/assignments — get feed & channel assignments for a user
+// GET /api/users/:id/assignments — get client assignments for a user
 router.get('/:id/assignments', requireAdmin, async (req, res) => {
   try {
-    const [feedsResult, channelsResult] = await Promise.all([
-      query('SELECT feed_id FROM user_feeds WHERE user_id = $1', [req.params.id]),
-      query('SELECT channel_id FROM user_channels WHERE user_id = $1', [req.params.id]),
-    ]);
+    const result = await query('SELECT client_id FROM user_clients WHERE user_id = $1', [req.params.id]);
     return res.json({
-      feed_ids: feedsResult.rows.map(r => r.feed_id),
-      channel_ids: channelsResult.rows.map(r => r.channel_id),
+      client_ids: result.rows.map(r => r.client_id),
     });
   } catch (err) {
     console.error(err);
@@ -98,22 +92,16 @@ router.patch('/:id', requireAdmin, async (req, res) => {
   }
 });
 
-// PUT /api/users/:id/assignments — replace all feed & channel assignments
+// PUT /api/users/:id/assignments — replace all client assignments
 router.put('/:id/assignments', requireAdmin, async (req, res) => {
   try {
-    const { feed_ids = [], channel_ids = [] } = req.body as { feed_ids: string[]; channel_ids: string[] };
+    const { client_ids = [] } = req.body as { client_ids: string[] };
     const userId = req.params.id;
 
-    // Replace feeds
-    await query('DELETE FROM user_feeds WHERE user_id = $1', [userId]);
-    for (const fid of feed_ids) {
-      await query('INSERT INTO user_feeds (user_id, feed_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [userId, fid]);
-    }
-
-    // Replace channels
-    await query('DELETE FROM user_channels WHERE user_id = $1', [userId]);
-    for (const cid of channel_ids) {
-      await query('INSERT INTO user_channels (user_id, channel_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [userId, cid]);
+    // Replace client assignments
+    await query('DELETE FROM user_clients WHERE user_id = $1', [userId]);
+    for (const cid of client_ids) {
+      await query('INSERT INTO user_clients (user_id, client_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [userId, cid]);
     }
 
     return res.json({ success: true });

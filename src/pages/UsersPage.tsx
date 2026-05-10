@@ -6,10 +6,9 @@ import { Plus, UserCheck, Shield, Eye, Pencil, X } from 'lucide-react';
 interface User {
   id: string; name: string; email: string; role: string;
   is_active: boolean; created_at: string;
-  feed_count?: number; channel_count?: number;
+  client_count?: number;
 }
-interface Feed { id: string; name: string; type: string; }
-interface Channel { id: string; name: string; type: string; }
+interface Client { id: string; name: string; slug: string; is_active: boolean; }
 
 function RoleBadge({ role }: { role: string }) {
   const map: Record<string, { badge: string; icon: React.ElementType }> = {
@@ -27,8 +26,7 @@ const emptyEdit = { name: '', role: 'client', is_active: true, password: '' };
 export default function UsersPage() {
   const { isAdmin } = useAuth();
   const [users, setUsers] = useState<User[]>([]);
-  const [feeds, setFeeds] = useState<Feed[]>([]);
-  const [channels, setChannels] = useState<Channel[]>([]);
+  const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Create modal
@@ -40,16 +38,13 @@ export default function UsersPage() {
   // Edit modal
   const [editUser, setEditUser] = useState<User | null>(null);
   const [editForm, setEditForm] = useState(emptyEdit);
-  const [assignedFeeds, setAssignedFeeds] = useState<string[]>([]);
-  const [assignedChannels, setAssignedChannels] = useState<string[]>([]);
+  const [assignedClients, setAssignedClients] = useState<string[]>([]);
   const [editError, setEditError] = useState('');
   const [editSaving, setEditSaving] = useState(false);
 
   useEffect(() => {
-    // Fetch each independently so a failure in one doesn't block the whole page
     api.get('/users').then((u) => setUsers(u as User[])).catch(console.error).finally(() => setLoading(false));
-    api.get('/feeds').then((f) => setFeeds(f as Feed[])).catch(() => setFeeds([]));
-    api.get('/channels').then((c) => setChannels(c as Channel[])).catch(() => setChannels([]));
+    api.get('/clients').then((c) => setClients(c as Client[])).catch(() => setClients([]));
   }, []);
 
   async function handleCreate(e: React.FormEvent) {
@@ -69,10 +64,9 @@ export default function UsersPage() {
     setEditForm({ name: user.name, role: user.role, is_active: user.is_active, password: '' });
     setEditError('');
     try {
-      const a = await api.get(`/users/${user.id}/assignments`) as { feed_ids: string[]; channel_ids: string[] };
-      setAssignedFeeds(a.feed_ids);
-      setAssignedChannels(a.channel_ids);
-    } catch { setAssignedFeeds([]); setAssignedChannels([]); }
+      const a = await api.get(`/users/${user.id}/assignments`) as { client_ids: string[] };
+      setAssignedClients(a.client_ids);
+    } catch { setAssignedClients([]); }
   }
 
   async function handleEdit(e: React.FormEvent) {
@@ -83,22 +77,19 @@ export default function UsersPage() {
       const payload: Record<string, unknown> = { name: editForm.name, role: editForm.role, is_active: editForm.is_active };
       if (editForm.password.length >= 8) payload.password = editForm.password;
       const updated = await api.patch(`/users/${editUser.id}`, payload) as User;
-      // Save assignments only for non-admin users
+      // Save client assignments only for non-admin users
       if (editForm.role !== 'admin') {
-        await api.put(`/users/${editUser.id}/assignments`, { feed_ids: assignedFeeds, channel_ids: assignedChannels });
+        await api.put(`/users/${editUser.id}/assignments`, { client_ids: assignedClients });
       }
-      setUsers(prev => prev.map(u => u.id === editUser.id ? { ...u, ...updated } : u));
+      setUsers(prev => prev.map(u => u.id === editUser.id ? { ...u, ...updated, client_count: editForm.role === 'admin' ? undefined : assignedClients.length } : u));
       setEditUser(null);
     } catch (err) {
       setEditError(err instanceof Error ? err.message : 'Failed to save');
     } finally { setEditSaving(false); }
   }
 
-  function toggleFeed(id: string) {
-    setAssignedFeeds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
-  }
-  function toggleChannel(id: string) {
-    setAssignedChannels(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  function toggleClient(id: string) {
+    setAssignedClients(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   }
 
   if (!isAdmin) return (
@@ -154,8 +145,8 @@ export default function UsersPage() {
                     <td><RoleBadge role={user.role} /></td>
                     <td style={{ fontSize: 12, color: '#64748b' }}>
                       {user.role === 'admin'
-                        ? <span style={{ color: '#4f6ef7' }}>Full access</span>
-                        : <span>{user.feed_count ?? 0} feed{Number(user.feed_count) !== 1 ? 's' : ''} · {user.channel_count ?? 0} channel{Number(user.channel_count) !== 1 ? 's' : ''}</span>}
+                        ? <span style={{ color: '#ffa500' }}>Full access</span>
+                        : <span>{user.client_count ?? 0} client{Number(user.client_count) !== 1 ? 's' : ''}</span>}
                     </td>
                     <td>
                       <span className={`badge ${user.is_active ? 'badge-success' : 'badge-muted'}`}>
@@ -256,46 +247,27 @@ export default function UsersPage() {
                 </div>
               </div>
 
-              {/* Feed & Channel assignment — only for non-admin */}
+              {/* Client assignment — only for non-admin */}
               {editForm.role !== 'admin' && (
-                <>
-                  <div style={{ borderTop: '1px solid rgba(255,255,255,0.07)', paddingTop: 16 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: '#94a3b8', marginBottom: 10 }}>Assigned Feeds</div>
-                    {feeds.length === 0 ? (
-                      <p style={{ fontSize: 12, color: '#475569' }}>No feeds available</p>
-                    ) : (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 160, overflowY: 'auto' }}>
-                        {feeds.map(f => (
-                          <label key={f.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', background: assignedFeeds.includes(f.id) ? 'rgba(79,110,247,0.12)' : 'rgba(255,255,255,0.03)', borderRadius: 8, border: `1px solid ${assignedFeeds.includes(f.id) ? 'rgba(79,110,247,0.35)' : 'rgba(255,255,255,0.05)'}`, cursor: 'pointer' }}>
-                            <input type="checkbox" checked={assignedFeeds.includes(f.id)} onChange={() => toggleFeed(f.id)} style={{ accentColor: '#4f6ef7' }} />
-                            <div>
-                              <div style={{ fontSize: 13, color: '#e2e8f0', fontWeight: 500 }}>{f.name}</div>
-                              <div style={{ fontSize: 11, color: '#64748b' }}>{f.type}</div>
-                            </div>
-                          </label>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: '#94a3b8', marginBottom: 10 }}>Assigned Channels</div>
-                    {channels.length === 0 ? (
-                      <p style={{ fontSize: 12, color: '#475569' }}>No channels available</p>
-                    ) : (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 160, overflowY: 'auto' }}>
-                        {channels.map(c => (
-                          <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', background: assignedChannels.includes(c.id) ? 'rgba(79,110,247,0.12)' : 'rgba(255,255,255,0.03)', borderRadius: 8, border: `1px solid ${assignedChannels.includes(c.id) ? 'rgba(79,110,247,0.35)' : 'rgba(255,255,255,0.05)'}`, cursor: 'pointer' }}>
-                            <input type="checkbox" checked={assignedChannels.includes(c.id)} onChange={() => toggleChannel(c.id)} style={{ accentColor: '#4f6ef7' }} />
-                            <div>
-                              <div style={{ fontSize: 13, color: '#e2e8f0', fontWeight: 500 }}>{c.name}</div>
-                              <div style={{ fontSize: 11, color: '#64748b' }}>{c.type}</div>
-                            </div>
-                          </label>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </>
+                <div style={{ borderTop: '1px solid rgba(255,255,255,0.07)', paddingTop: 16 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: '#94a3b8', marginBottom: 10 }}>Assigned Clients</div>
+                  <p style={{ fontSize: 12, color: '#64748b', marginBottom: 10 }}>User will have access to all feeds, channels, orders, and products under the selected clients.</p>
+                  {clients.length === 0 ? (
+                    <p style={{ fontSize: 12, color: '#475569' }}>No clients available</p>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 220, overflowY: 'auto' }}>
+                      {clients.map(c => (
+                        <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', background: assignedClients.includes(c.id) ? 'rgba(255,165,0,0.12)' : 'rgba(255,255,255,0.03)', borderRadius: 8, border: `1px solid ${assignedClients.includes(c.id) ? 'rgba(255,165,0,0.35)' : 'rgba(255,255,255,0.05)'}`, cursor: 'pointer' }}>
+                          <input type="checkbox" checked={assignedClients.includes(c.id)} onChange={() => toggleClient(c.id)} style={{ accentColor: '#ffa500' }} />
+                          <div>
+                            <div style={{ fontSize: 13, color: '#e2e8f0', fontWeight: 500 }}>{c.name}</div>
+                            <div style={{ fontSize: 11, color: '#64748b' }}>/{c.slug}</div>
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </div>
               )}
 
               {editError && <div style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: '#f87171' }}>{editError}</div>}
