@@ -44,6 +44,16 @@ router.post('/login', async (req, res) => {
   }
 });
 
+// GET /api/auth/setup-check — is initial setup still allowed?
+router.get('/setup-check', async (_req, res) => {
+  try {
+    const existing = await query("SELECT id FROM users WHERE role = 'admin' LIMIT 1");
+    return res.json({ allowed: existing.rows.length === 0 });
+  } catch {
+    return res.json({ allowed: false });
+  }
+});
+
 // POST /api/auth/register (admin-only via setup or first user)
 router.post('/setup', async (req, res) => {
   try {

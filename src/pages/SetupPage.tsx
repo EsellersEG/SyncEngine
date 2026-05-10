@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, setToken, setUser } from '../lib/api';
 import { Activity, Shield } from 'lucide-react';
@@ -8,6 +8,15 @@ export default function SetupPage() {
   const [form, setForm] = useState({ name: '', email: '', password: '' });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [allowed, setAllowed] = useState(false);
+
+  useEffect(() => {
+    // Only allow setup if no admin exists yet
+    api.get('/auth/setup-check').then((res: { allowed: boolean }) => {
+      if (!res.allowed) navigate('/login', { replace: true });
+      else setAllowed(true);
+    }).catch(() => navigate('/login', { replace: true }));
+  }, [navigate]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -24,6 +33,8 @@ export default function SetupPage() {
       setLoading(false);
     }
   }
+
+  if (!allowed) return null;
 
   return (
     <div style={{

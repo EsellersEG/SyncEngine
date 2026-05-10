@@ -112,12 +112,7 @@ export default function LoginPage() {
           </form>
         </div>
 
-        <p style={{ textAlign: 'center', fontSize: 13, color: '#475569', marginTop: 20 }}>
-          First time?{' '}
-          <a href="/setup" style={{ color: '#6b87ff', textDecoration: 'none', fontWeight: 500 }}>
-            Set up admin account →
-          </a>
-        </p>
+
       </div>
     </div>
   );
