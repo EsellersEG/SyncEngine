@@ -130,7 +130,7 @@ export default function InvoicesPage() {
 
   async function handleDownloadPDF(id: string, invoiceNumber: string) {
     try {
-      const token = localStorage.getItem('token');
+      const token = localStorage.getItem('sync_engine_token');
       const resp = await fetch(`/api/invoices/${id}/pdf`, {
         headers: { Authorization: `Bearer ${token}` },
       });
