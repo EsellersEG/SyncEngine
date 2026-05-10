@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { query } from '../db.js';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
 import type { AuthRequest } from '../middleware/auth.js';
+import { generateInvoicePDF } from '../services/invoiceService.js';
 
 const router = Router();
 router.use(authenticate);
@@ -250,7 +251,6 @@ router.get('/:id/pdf', requireAdmin, async (req: AuthRequest, res) => {
       settings[row.key] = row.value;
     }
 
-    const { generateInvoicePDF } = await import('../services/invoiceService.js');
     const pdfBuffer = await generateInvoicePDF(invoice, settings);
 
     res.setHeader('Content-Type', 'application/pdf');
@@ -258,7 +258,7 @@ router.get('/:id/pdf', requireAdmin, async (req: AuthRequest, res) => {
     res.send(pdfBuffer);
   } catch (err) {
     console.error('PDF generation error:', err);
-    return res.status(500).json({ error: 'Failed to generate PDF' });
+    return res.status(500).json({ error: 'Failed to generate PDF', detail: err instanceof Error ? err.message : String(err) });
   }
 });
 

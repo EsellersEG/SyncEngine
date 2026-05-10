@@ -1,6 +1,4 @@
-import { createRequire } from 'module';
-const require = createRequire(import.meta.url);
-const PDFDocument = require('pdfkit');
+import PDFDocument from 'pdfkit';
 
 interface InvoiceItem {
   description: string;

@@ -134,7 +134,10 @@ export default function InvoicesPage() {
       const resp = await fetch(`/api/invoices/${id}/pdf`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (!resp.ok) throw new Error('PDF download failed');
+      if (!resp.ok) {
+        const errData = await resp.json().catch(() => ({}));
+        throw new Error(errData.detail || errData.error || 'PDF download failed');
+      }
       const blob = await resp.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -144,7 +147,7 @@ export default function InvoicesPage() {
       URL.revokeObjectURL(url);
     } catch (err) {
       console.error(err);
-      alert('Failed to download PDF');
+      alert(err instanceof Error ? err.message : 'Failed to download PDF');
     }
   }
 
