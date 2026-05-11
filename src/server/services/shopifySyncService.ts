@@ -1050,9 +1050,36 @@ function formatMetafieldValue(rawValue: unknown, type: string): string {
   if (type.startsWith('list.')) {
     if (str.startsWith('[')) return str;
     const items = str.split(',').map(s => s.trim()).filter(Boolean);
-    if (type === 'list.number_integer' || type === 'list.number_decimal')
+    const innerType = type.replace('list.', '');
+    if (innerType === 'number_integer' || innerType === 'number_decimal')
       return JSON.stringify(items.map(Number));
     return JSON.stringify(items);
+  }
+  // JSON-structured types — pass through if already JSON, otherwise wrap
+  if (type === 'weight' || type === 'volume' || type === 'dimension') {
+    if (str.startsWith('{')) return str;
+    // Expect "value unit" format e.g. "5.0 kg" or just a number
+    const parts = str.split(/\s+/);
+    const value = parseFloat(parts[0]) || 0;
+    const unit = parts[1] || (type === 'weight' ? 'kg' : type === 'volume' ? 'ml' : 'mm');
+    return JSON.stringify({ value, unit });
+  }
+  if (type === 'rating') {
+    if (str.startsWith('{')) return str;
+    return JSON.stringify({ value: str, scale_min: '0', scale_max: '5' });
+  }
+  if (type === 'money') {
+    if (str.startsWith('{')) return str;
+    return JSON.stringify({ amount: str, currency_code: 'USD' });
+  }
+  if (type === 'color') {
+    // Ensure it's a valid hex color format
+    if (str.startsWith('#')) return str;
+    return `#${str}`;
+  }
+  if (type === 'boolean') {
+    const lower = str.toLowerCase();
+    return (lower === 'true' || lower === '1' || lower === 'yes') ? 'true' : 'false';
   }
   return str;
 }

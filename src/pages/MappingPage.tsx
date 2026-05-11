@@ -351,17 +351,57 @@ export default function MappingPage() {
                             onChange={e => setMetafields(prev => prev.map((m, i) => i === idx ? { ...m, key: e.target.value } : m))} />
                           <select className="input" value={mf.type}
                             onChange={e => setMetafields(prev => prev.map((m, i) => i === idx ? { ...m, type: e.target.value } : m))}>
-                            <option value="number_decimal">Decimal</option>
-                            <option value="number_integer">Integer</option>
-                            <option value="single_line_text_field">Text</option>
-                            <option value="multi_line_text_field">Multi-line Text</option>
-                            <option value="list.single_line_text_field">List (Text)</option>
-                            <option value="list.number_integer">List (Integer)</option>
-                            <option value="list.number_decimal">List (Decimal)</option>
-                            <option value="boolean">Boolean</option>
-                            <option value="json">JSON</option>
-                            <option value="url">URL</option>
-                            <option value="date">Date</option>
+                            <optgroup label="Basic">
+                              <option value="single_line_text_field">Single line text</option>
+                              <option value="multi_line_text_field">Multi-line text</option>
+                              <option value="rich_text_field">Rich text</option>
+                              <option value="number_integer">Integer</option>
+                              <option value="number_decimal">Decimal</option>
+                              <option value="boolean">Boolean (true/false)</option>
+                              <option value="json">JSON</option>
+                            </optgroup>
+                            <optgroup label="Date & Time">
+                              <option value="date">Date</option>
+                              <option value="date_time">Date &amp; Time</option>
+                            </optgroup>
+                            <optgroup label="Measurement">
+                              <option value="weight">Weight</option>
+                              <option value="volume">Volume</option>
+                              <option value="dimension">Dimension</option>
+                            </optgroup>
+                            <optgroup label="Other">
+                              <option value="url">URL</option>
+                              <option value="color">Color</option>
+                              <option value="rating">Rating</option>
+                              <option value="money">Money</option>
+                              <option value="file_reference">File reference</option>
+                            </optgroup>
+                            <optgroup label="Reference">
+                              <option value="product_reference">Product reference</option>
+                              <option value="collection_reference">Collection reference</option>
+                              <option value="variant_reference">Variant reference</option>
+                              <option value="page_reference">Page reference</option>
+                              <option value="metaobject_reference">Metaobject reference</option>
+                            </optgroup>
+                            <optgroup label="List">
+                              <option value="list.single_line_text_field">List (Text)</option>
+                              <option value="list.multi_line_text_field">List (Multi-line text)</option>
+                              <option value="list.number_integer">List (Integer)</option>
+                              <option value="list.number_decimal">List (Decimal)</option>
+                              <option value="list.date">List (Date)</option>
+                              <option value="list.date_time">List (Date &amp; Time)</option>
+                              <option value="list.url">List (URL)</option>
+                              <option value="list.color">List (Color)</option>
+                              <option value="list.weight">List (Weight)</option>
+                              <option value="list.volume">List (Volume)</option>
+                              <option value="list.dimension">List (Dimension)</option>
+                              <option value="list.rating">List (Rating)</option>
+                              <option value="list.file_reference">List (File reference)</option>
+                              <option value="list.product_reference">List (Product reference)</option>
+                              <option value="list.collection_reference">List (Collection reference)</option>
+                              <option value="list.variant_reference">List (Variant reference)</option>
+                              <option value="list.metaobject_reference">List (Metaobject reference)</option>
+                            </optgroup>
                           </select>
                           <select className="input" value={mf.feed_column}
                             onChange={e => setMetafields(prev => prev.map((m, i) => i === idx ? { ...m, feed_column: e.target.value } : m))}>
