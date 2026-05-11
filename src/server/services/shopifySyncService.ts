@@ -145,6 +145,58 @@ function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+// ── Metafield Definitions Cache ────────────────────────────────────────────
+const metafieldDefCache = new Map<string, { defs: Map<string, string>; fetchedAt: number }>();
+const METAFIELD_DEF_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+async function getMetafieldDefinitions(channel: Channel): Promise<Map<string, string>> {
+  const cacheKey = channel.id;
+  const cached = metafieldDefCache.get(cacheKey);
+  if (cached && Date.now() - cached.fetchedAt < METAFIELD_DEF_CACHE_TTL) {
+    return cached.defs;
+  }
+  const defs = new Map<string, string>();
+  try {
+    const defQuery = `{ metafieldDefinitions(ownerType: PRODUCT, first: 250) { edges { node { namespace key type { name } } } } }`;
+    const result = await shopifyGraphQL(channel, defQuery) as {
+      metafieldDefinitions: { edges: Array<{ node: { namespace: string; key: string; type: { name: string } } }> }
+    };
+    for (const edge of result.metafieldDefinitions.edges) {
+      const { namespace, key, type } = edge.node;
+      defs.set(`${namespace}.${key}`, type.name);
+    }
+    console.log(`[SyncFlow] Fetched ${defs.size} metafield definitions from Shopify`);
+  } catch (err) {
+    console.warn(`[SyncFlow] Could not fetch metafield definitions, using user-selected types:`, err);
+  }
+  metafieldDefCache.set(cacheKey, { defs, fetchedAt: Date.now() });
+  return defs;
+}
+
+function buildMetafields(
+  rawData: Record<string, string | number | null>,
+  metafieldMappings: AttributeMapping[],
+  shopifyDefs: Map<string, string>,
+): Array<{ namespace: string; key: string; type: string; value: string }> {
+  return metafieldMappings
+    .filter(m => rawData[m.feed_column] !== undefined && rawData[m.feed_column] !== null && rawData[m.feed_column] !== '')
+    .map(m => {
+      const parts = m.target_field.replace('metafield:', '').split(':');
+      const namespace = parts[0];
+      const key = parts[1];
+      const userType = parts[2] || 'single_line_text_field';
+      // Auto-detect: use Shopify definition type if available, else user's selection
+      const defType = shopifyDefs.get(`${namespace}.${key}`);
+      const mfType = defType || userType;
+      return {
+        namespace,
+        key,
+        type: mfType,
+        value: formatMetafieldValue(rawData[m.feed_column], mfType),
+      };
+    });
+}
+
 function parseMappedWeight(mapped: Record<string, unknown>): { value: number; unit: string } | null {
   if (mapped.weight === undefined || mapped.weight === null || mapped.weight === '') {
     return null;
@@ -464,6 +516,9 @@ async function turboSync(
   // Pre-compute metafield mappings
   const metafieldMappings = mappings.filter(m => m.target_field.startsWith('metafield:'));
 
+  // Fetch Shopify metafield definitions for auto-type detection
+  const shopifyDefs = metafieldMappings.length > 0 ? await getMetafieldDefinitions(channel) : new Map<string, string>();
+
   for (let i = 0; i < products.length; i += BATCH_SIZE) {
     if (await isJobCancelled(jobId)) {
       console.log(`[SyncFlow] Job ${jobId} cancelled at product ${i}/${products.length}`);
@@ -471,7 +526,7 @@ async function turboSync(
     }
 
     const batch = products.slice(i, i + BATCH_SIZE);
-    await Promise.all(batch.map(p => syncProductTurbo(channel, p, mappings, metafieldMappings, shopifyMap, jobId, locationId, 0, priceAdjustmentPercent, priceRoundingMode, warehouseName)));
+    await Promise.all(batch.map(p => syncProductTurbo(channel, p, mappings, metafieldMappings, shopifyMap, jobId, locationId, 0, priceAdjustmentPercent, priceRoundingMode, warehouseName, shopifyDefs)));
     await query('UPDATE sync_jobs SET processed_count = $1 WHERE id = $2', [Math.min(i + BATCH_SIZE, products.length), jobId]);
   }
 }
@@ -487,7 +542,8 @@ async function syncProductTurbo(
   retries = 0,
   priceAdjustmentPercent = 0,
   priceRoundingMode: 'none' | 'up' | 'down' = 'none',
-  warehouseName?: string
+  warehouseName?: string,
+  shopifyDefs: Map<string, string> = new Map(),
 ): Promise<void> {
   const shopifyIds = shopifyMap.get(product.sku);
 
@@ -503,18 +559,7 @@ async function syncProductTurbo(
     // Combined: Price + Metafields in minimal API calls
     // 1. Product update with metafields (single call)
     if (metafieldMappings.length > 0) {
-      const metafields = metafieldMappings
-        .filter(m => product.raw_data[m.feed_column] !== undefined && product.raw_data[m.feed_column] !== null && product.raw_data[m.feed_column] !== '')
-        .map(m => {
-          const parts = m.target_field.replace('metafield:', '').split(':');
-          const mfType = parts[2] || 'single_line_text_field';
-          return {
-            namespace: parts[0],
-            key: parts[1],
-            type: mfType,
-            value: formatMetafieldValue(product.raw_data[m.feed_column], mfType),
-          };
-        });
+      const metafields = buildMetafields(product.raw_data, metafieldMappings, shopifyDefs);
       if (metafields.length > 0) {
         const updateMutation = `
           mutation productUpdate($input: ProductInput!) {
@@ -624,7 +669,7 @@ async function syncProductTurbo(
     const errMsg = String(err);
     if (errMsg.includes('Throttled') && retries < MAX_RETRIES) {
       await sleep(RETRY_DELAY_MS * (retries + 1));
-      return syncProductTurbo(channel, product, mappings, metafieldMappings, shopifyMap, jobId, locationId, retries + 1, priceAdjustmentPercent, priceRoundingMode, warehouseName);
+      return syncProductTurbo(channel, product, mappings, metafieldMappings, shopifyMap, jobId, locationId, retries + 1, priceAdjustmentPercent, priceRoundingMode, warehouseName, shopifyDefs);
     }
     await logSyncEntry(jobId, product.sku, 'failed', errMsg);
     await query('UPDATE sync_jobs SET failed_count = failed_count + 1 WHERE id = $1', [jobId]);
@@ -656,6 +701,9 @@ async function individualSync(
   // Pre-compute metafield mappings once
   const metafieldMappings = mappings.filter(m => m.target_field.startsWith('metafield:'));
 
+  // Fetch Shopify metafield definitions for auto-type detection
+  const shopifyDefs = metafieldMappings.length > 0 ? await getMetafieldDefinitions(channel) : new Map<string, string>();
+
   const groupedProducts = groupRowsByHandle(products, mappings);
 
   let processed = 0;
@@ -668,7 +716,7 @@ async function individualSync(
     }
 
     const batch = groupedProducts.slice(i, i + INDIVIDUAL_PARALLEL_SIZE);
-    await Promise.all(batch.map(group => syncGroupedProduct(channel, group, mappings, metafieldMappings, jobId, withImages, shopifyMap, locationId, priceAdjustmentPercent, priceRoundingMode)));
+    await Promise.all(batch.map(group => syncGroupedProduct(channel, group, mappings, metafieldMappings, jobId, withImages, shopifyMap, locationId, priceAdjustmentPercent, priceRoundingMode, shopifyDefs)));
 
     processed += batch.reduce((sum, group) => sum + group.rows.length, 0);
     await query('UPDATE sync_jobs SET processed_count = $1 WHERE id = $2', [processed, jobId]);
@@ -686,6 +734,7 @@ async function syncGroupedProduct(
   locationId?: string,
   priceAdjustmentPercent = 0,
   priceRoundingMode: 'none' | 'up' | 'down' = 'none',
+  shopifyDefs: Map<string, string> = new Map(),
 ) {
   const firstRow = group.rows[0];
 
@@ -693,7 +742,7 @@ async function syncGroupedProduct(
     // Multiple rows share the same handle → variant group
     try {
       validateVariantSKUs(group.rows);
-      await syncVariantGroup(channel, group, mappings, metafieldMappings, withImages, shopifyMap, locationId, priceAdjustmentPercent, priceRoundingMode);
+      await syncVariantGroup(channel, group, mappings, metafieldMappings, withImages, shopifyMap, locationId, priceAdjustmentPercent, priceRoundingMode, shopifyDefs);
       await logSyncEntry(jobId, firstRow.sku, 'updated', `Variant group synced (${group.rows.length} rows, handle: ${group.handle})`);
       await query('UPDATE sync_jobs SET updated_count = updated_count + $1 WHERE id = $2', [group.rows.length, jobId]);
     } catch (err) {
@@ -712,7 +761,7 @@ async function syncGroupedProduct(
 
     try {
       if (!shopifyIds) {
-        await createShopifyProduct(channel, product.sku, mapped, withImages, mappings, product.raw_data);
+        await createShopifyProduct(channel, product.sku, mapped, withImages, mappings, product.raw_data, shopifyDefs);
         await logSyncEntry(jobId, product.sku, 'created', 'New product created in Shopify');
         await query('UPDATE sync_jobs SET created_count = created_count + 1 WHERE id = $1', [jobId]);
       } else {
@@ -733,18 +782,7 @@ async function syncGroupedProduct(
         if (mapped.status) input.status = String(mapped.status).toUpperCase();
 
         if (metafieldMappings.length > 0) {
-          const metafields = metafieldMappings
-            .filter(m => product.raw_data[m.feed_column] !== undefined && product.raw_data[m.feed_column] !== null && product.raw_data[m.feed_column] !== '')
-            .map(m => {
-              const parts = m.target_field.replace('metafield:', '').split(':');
-              const mfType = parts[2] || 'single_line_text_field';
-              return {
-                namespace: parts[0],
-                key: parts[1],
-                type: mfType,
-                value: formatMetafieldValue(product.raw_data[m.feed_column], mfType),
-              };
-            });
+          const metafields = buildMetafields(product.raw_data, metafieldMappings, shopifyDefs);
           if (metafields.length > 0) {
             input.metafields = metafields;
           }
@@ -861,7 +899,7 @@ async function syncGroupedProduct(
   }));
 }
 
-async function createShopifyProduct(channel: Channel, sku: string, mapped: Record<string, unknown>, withImages: boolean, mappings?: AttributeMapping[], rawData?: Record<string, unknown>) {
+async function createShopifyProduct(channel: Channel, sku: string, mapped: Record<string, unknown>, withImages: boolean, mappings?: AttributeMapping[], rawData?: Record<string, unknown>, shopifyDefs: Map<string, string> = new Map()) {
   const createMutation = `
     mutation productCreate($product: ProductCreateInput!, $media: [CreateMediaInput!]) {
       productCreate(product: $product, media: $media) {
@@ -884,18 +922,7 @@ async function createShopifyProduct(channel: Channel, sku: string, mapped: Recor
   // Add metafields to create input
   if (mappings && rawData) {
     const metafieldMappings = mappings.filter(m => m.target_field.startsWith('metafield:'));
-    const metafields = metafieldMappings
-      .filter(m => rawData[m.feed_column] !== undefined && rawData[m.feed_column] !== null && rawData[m.feed_column] !== '')
-      .map(m => {
-        const parts = m.target_field.replace('metafield:', '').split(':');
-        const mfType = parts[2] || 'single_line_text_field';
-        return {
-          namespace: parts[0],
-          key: parts[1],
-          type: mfType,
-          value: formatMetafieldValue(rawData[m.feed_column], mfType),
-        };
-      });
+    const metafields = buildMetafields(rawData as Record<string, string | number | null>, metafieldMappings, shopifyDefs);
     if (metafields.length > 0) {
       product.metafields = metafields;
     }
@@ -1157,6 +1184,7 @@ async function syncVariantGroup(
   locationId?: string,
   priceAdjustmentPercent = 0,
   priceRoundingMode: 'none' | 'up' | 'down' = 'none',
+  shopifyDefs: Map<string, string> = new Map(),
 ) {
   const mappedRows = group.rows.map(row => ({ row, mapped: applyPriceAdjustment(applyMappings(row.raw_data, mappings), priceAdjustmentPercent, priceRoundingMode) }));
   const first = mappedRows[0];
@@ -1182,18 +1210,7 @@ async function syncVariantGroup(
     }
   }
 
-  const metafields = metafieldMappings
-    .filter(m => first.row.raw_data[m.feed_column] !== undefined && first.row.raw_data[m.feed_column] !== null && first.row.raw_data[m.feed_column] !== '')
-    .map(m => {
-      const parts = m.target_field.replace('metafield:', '').split(':');
-      const mfType = parts[2] || 'single_line_text_field';
-      return {
-        namespace: parts[0],
-        key: parts[1],
-        type: mfType,
-        value: formatMetafieldValue(first.row.raw_data[m.feed_column], mfType),
-      };
-    });
+  const metafields = buildMetafields(first.row.raw_data, metafieldMappings, shopifyDefs);
 
   const input: Record<string, unknown> = {
     title: first.mapped.title || first.row.sku,
