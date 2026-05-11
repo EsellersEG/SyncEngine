@@ -1076,7 +1076,8 @@ function formatMetafieldValue(rawValue: unknown, type: string): string {
   const str = String(rawValue);
   if (type.startsWith('list.')) {
     if (str.startsWith('[')) return str;
-    const items = str.split(',').map(s => s.trim()).filter(Boolean);
+    // Split on commas OR newlines (feeds often use newlines as separators)
+    const items = str.split(/[,\n]+/).map(s => s.trim()).filter(Boolean);
     const innerType = type.replace('list.', '');
     if (innerType === 'number_integer' || innerType === 'number_decimal')
       return JSON.stringify(items.map(Number));
@@ -1107,6 +1108,10 @@ function formatMetafieldValue(rawValue: unknown, type: string): string {
   if (type === 'boolean') {
     const lower = str.toLowerCase();
     return (lower === 'true' || lower === '1' || lower === 'yes') ? 'true' : 'false';
+  }
+  // single_line_text_field must not contain newlines
+  if (type === 'single_line_text_field') {
+    return str.replace(/[\r\n]+/g, ' ').trim();
   }
   return str;
 }
