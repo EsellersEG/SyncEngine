@@ -528,7 +528,11 @@ async function syncProductTurbo(
         }) as { productUpdate?: { userErrors?: Array<{ field: string; message: string }> } };
         const metaErrors = metaResult?.productUpdate?.userErrors;
         if (metaErrors && metaErrors.length > 0) {
-          console.error(`[SyncFlow] Metafield update failed for ${product.sku}: ${JSON.stringify(metaErrors)}`);
+          const details = metaErrors.map((e, i) => {
+            const mf = metafields[i] || metafields[0];
+            return `[${mf?.namespace}.${mf?.key} (type=${mf?.type}, value=${mf?.value?.substring(0, 80)})]: ${e.message}`;
+          }).join('; ');
+          throw new Error(`Metafield error: ${details}`);
         }
       }
     }
@@ -747,7 +751,19 @@ async function syncGroupedProduct(
         }
 
         if (Object.keys(input).length > 1) {
-          updatePromises.push(shopifyGraphQL(channel, updateMutation, { input }));
+          updatePromises.push(shopifyGraphQL(channel, updateMutation, { input }).then((r: unknown) => {
+            const res = r as { productUpdate?: { userErrors?: Array<{ field: string; message: string }> } };
+            const errs = res?.productUpdate?.userErrors;
+            if (errs && errs.length > 0) {
+              const mfs = (input.metafields as Array<{namespace: string; key: string; type: string; value: string}>) || [];
+              const details = errs.map((e, i) => {
+                const mf = mfs[i] || mfs[0];
+                const ctx = mf ? ` [${mf.namespace}.${mf.key} type=${mf.type} value=${mf.value?.substring(0, 80)}]` : '';
+                return `${e.message}${ctx}`;
+              }).join('; ');
+              throw new Error(`Metafield error: ${details}`);
+            }
+          }));
         }
 
         if (mapped.price || mapped.compare_at_price) {
@@ -901,7 +917,16 @@ async function createShopifyProduct(channel: Channel, sku: string, mapped: Recor
   }) as { productCreate: { product: { id: string; variants: { edges: Array<{ node: { id: string; inventoryItem?: { id: string } } }> } }; userErrors: Array<{ field: string; message: string }> } };
 
   if (result.productCreate.userErrors?.length > 0) {
-    throw new Error(JSON.stringify(result.productCreate.userErrors));
+    const metafields = (product as Record<string, unknown>).metafields as Array<{namespace: string; key: string; type: string; value: string}> | undefined;
+    const details = result.productCreate.userErrors.map((e: { field: string; message: string }, i: number) => {
+      const fieldStr = e.field || '';
+      if (metafields && fieldStr.includes('metafield')) {
+        const mf = metafields[i] || metafields[0];
+        return `[${mf?.namespace}.${mf?.key} type=${mf?.type} value=${mf?.value?.substring(0, 80)}]: ${e.message}`;
+      }
+      return `[${fieldStr}]: ${e.message}`;
+    }).join('; ');
+    throw new Error(`Create failed: ${details}`);
   }
 
   const productId = result.productCreate.product?.id;
@@ -1225,7 +1250,16 @@ async function syncVariantGroup(
   }) as { productSet: { product?: { id: string }; userErrors?: Array<{ field?: string[]; message: string }> } };
 
   if (result.productSet.userErrors && result.productSet.userErrors.length > 0) {
-    throw new Error(result.productSet.userErrors.map(err => err.message).join('; '));
+    const details = result.productSet.userErrors.map(err => {
+      const fieldPath = Array.isArray(err.field) ? err.field.join('.') : (err.field || '');
+      // Try to match field to metafield for better context
+      if (fieldPath.includes('metafield') && metafields.length > 0) {
+        const mfSummary = metafields.map(mf => `${mf.namespace}.${mf.key}(type=${mf.type},val=${mf.value?.substring(0, 60)})`).join(', ');
+        return `${err.message} [metafields: ${mfSummary}]`;
+      }
+      return `${err.message}${fieldPath ? ` [field: ${fieldPath}]` : ''}`;
+    }).join('; ');
+    throw new Error(details);
   }
 
   const syncedProductId = result.productSet.product?.id || existingProductId;
