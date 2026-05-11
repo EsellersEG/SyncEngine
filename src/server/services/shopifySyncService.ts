@@ -507,11 +507,12 @@ async function syncProductTurbo(
         .filter(m => product.raw_data[m.feed_column] !== undefined && product.raw_data[m.feed_column] !== null && product.raw_data[m.feed_column] !== '')
         .map(m => {
           const parts = m.target_field.replace('metafield:', '').split(':');
+          const mfType = parts[2] || 'single_line_text_field';
           return {
             namespace: parts[0],
             key: parts[1],
-            type: parts[2] || 'single_line_text_field',
-            value: String(product.raw_data[m.feed_column]),
+            type: mfType,
+            value: formatMetafieldValue(product.raw_data[m.feed_column], mfType),
           };
         });
       if (metafields.length > 0) {
@@ -732,11 +733,12 @@ async function syncGroupedProduct(
             .filter(m => product.raw_data[m.feed_column] !== undefined && product.raw_data[m.feed_column] !== null && product.raw_data[m.feed_column] !== '')
             .map(m => {
               const parts = m.target_field.replace('metafield:', '').split(':');
+              const mfType = parts[2] || 'single_line_text_field';
               return {
                 namespace: parts[0],
                 key: parts[1],
-                type: parts[2] || 'single_line_text_field',
-                value: String(product.raw_data[m.feed_column]),
+                type: mfType,
+                value: formatMetafieldValue(product.raw_data[m.feed_column], mfType),
               };
             });
           if (metafields.length > 0) {
@@ -870,11 +872,12 @@ async function createShopifyProduct(channel: Channel, sku: string, mapped: Recor
       .filter(m => rawData[m.feed_column] !== undefined && rawData[m.feed_column] !== null && rawData[m.feed_column] !== '')
       .map(m => {
         const parts = m.target_field.replace('metafield:', '').split(':');
+        const mfType = parts[2] || 'single_line_text_field';
         return {
           namespace: parts[0],
           key: parts[1],
-          type: parts[2] || 'single_line_text_field',
-          value: String(rawData[m.feed_column]),
+          type: mfType,
+          value: formatMetafieldValue(rawData[m.feed_column], mfType),
         };
       });
     if (metafields.length > 0) {
@@ -1016,6 +1019,19 @@ async function setProductPublicationStatus(channel: Channel, productId: string, 
   }
 }
 
+// ── Metafield Value Formatter ───────────────────────────────────────────────
+function formatMetafieldValue(rawValue: unknown, type: string): string {
+  const str = String(rawValue);
+  if (type.startsWith('list.')) {
+    if (str.startsWith('[')) return str;
+    const items = str.split(',').map(s => s.trim()).filter(Boolean);
+    if (type === 'list.number_integer' || type === 'list.number_decimal')
+      return JSON.stringify(items.map(Number));
+    return JSON.stringify(items);
+  }
+  return str;
+}
+
 // ── Mapping Helper ─────────────────────────────────────────────────────────
 function applyMappings(rawData: Record<string, unknown>, mappings: AttributeMapping[]): Record<string, unknown> {
   const result: Record<string, unknown> = {};
@@ -1118,11 +1134,12 @@ async function syncVariantGroup(
     .filter(m => first.row.raw_data[m.feed_column] !== undefined && first.row.raw_data[m.feed_column] !== null && first.row.raw_data[m.feed_column] !== '')
     .map(m => {
       const parts = m.target_field.replace('metafield:', '').split(':');
+      const mfType = parts[2] || 'single_line_text_field';
       return {
         namespace: parts[0],
         key: parts[1],
-        type: parts[2] || 'single_line_text_field',
-        value: String(first.row.raw_data[m.feed_column]),
+        type: mfType,
+        value: formatMetafieldValue(first.row.raw_data[m.feed_column], mfType),
       };
     });
 

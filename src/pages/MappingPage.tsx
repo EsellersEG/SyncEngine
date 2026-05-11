@@ -355,6 +355,9 @@ export default function MappingPage() {
                             <option value="number_integer">Integer</option>
                             <option value="single_line_text_field">Text</option>
                             <option value="multi_line_text_field">Multi-line Text</option>
+                            <option value="list.single_line_text_field">List (Text)</option>
+                            <option value="list.number_integer">List (Integer)</option>
+                            <option value="list.number_decimal">List (Decimal)</option>
                             <option value="boolean">Boolean</option>
                             <option value="json">JSON</option>
                             <option value="url">URL</option>
