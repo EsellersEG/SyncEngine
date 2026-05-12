@@ -121,9 +121,10 @@ export async function generateInvoicePDF(
     doc.fontSize(8).font('Helvetica-Bold').fillColor(C.accent).text('BILL TO', rX + 14, mY + 10);
     doc.fontSize(10).font('Helvetica-Bold').fillColor(C.text)
       .text(invoice.client_name, rX + 14, mY + 26, { width: cardW - 28 });
+    const nameH = doc.heightOfString(invoice.client_name, { width: cardW - 28, fontSize: 10 });
     doc.fontSize(8.5).font('Helvetica').fillColor(C.textLight);
-    let bY = mY + 42;
-    if (invoice.client_address) { doc.text(invoice.client_address, rX + 14, bY, { width: cardW - 28 }); bY += 26; }
+    let bY = mY + 26 + nameH + 6;
+    if (invoice.client_address) { doc.text(invoice.client_address, rX + 14, bY, { width: cardW - 28 }); bY += doc.heightOfString(invoice.client_address, { width: cardW - 28, fontSize: 8.5 }) + 6; }
     if (invoice.client_phone) { doc.text(invoice.client_phone, rX + 14, bY); bY += 15; }
     if (invoice.client_email) { doc.text(invoice.client_email, rX + 14, bY); bY += 15; }
     if (invoice.client_tax_id) { doc.text('Tax ID: ' + invoice.client_tax_id, rX + 14, bY); }
