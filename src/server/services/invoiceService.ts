@@ -95,9 +95,10 @@ export async function generateInvoicePDF(
     // ── Meta cards ─────────────────────────────────────────────
     const mY = dY + 16;
     const cardW = (cW - 30) / 2;
+    const cardH = 110;
 
     // Left: Invoice Details
-    doc.rect(mg, mY, cardW, 80).lineWidth(0.5).strokeColor(C.border).fillAndStroke(C.bgLight, C.border);
+    doc.rect(mg, mY, cardW, cardH).lineWidth(0.5).strokeColor(C.border).fillAndStroke(C.bgLight, C.border);
     doc.fontSize(8).font('Helvetica-Bold').fillColor(C.accent).text('INVOICE DETAILS', mg + 14, mY + 10);
     doc.fontSize(8.5).font('Helvetica').fillColor(C.textLight);
     const lX = mg + 14, vX = mg + 90;
@@ -116,7 +117,7 @@ export async function generateInvoicePDF(
 
     // Right: Bill To
     const rX = mg + cardW + 30;
-    doc.rect(rX, mY, cardW, 80).lineWidth(0.5).strokeColor(C.border).fillAndStroke(C.bgLight, C.border);
+    doc.rect(rX, mY, cardW, cardH).lineWidth(0.5).strokeColor(C.border).fillAndStroke(C.bgLight, C.border);
     doc.fontSize(8).font('Helvetica-Bold').fillColor(C.accent).text('BILL TO', rX + 14, mY + 10);
     doc.fontSize(10).font('Helvetica-Bold').fillColor(C.text)
       .text(invoice.client_name, rX + 14, mY + 26, { width: cardW - 28 });
@@ -128,7 +129,7 @@ export async function generateInvoicePDF(
     if (invoice.client_tax_id) { doc.text('Tax ID: ' + invoice.client_tax_id, rX + 14, bY); }
 
     // ── Line items table ──────────────────────────────────────
-    const tT = mY + 100;
+    const tT = mY + cardH + 20;
     const col = { n: mg, d: mg + 35, q: mg + cW - 200, p: mg + cW - 130, t: mg + cW - 55 };
     const hH = 28;
 
