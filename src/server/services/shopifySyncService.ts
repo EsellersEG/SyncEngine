@@ -916,7 +916,7 @@ async function createShopifyProduct(channel: Channel, sku: string, mapped: Recor
     status: mapped.status ? String(mapped.status).toUpperCase() : 'DRAFT',
   };
 
-  if (mapped.handle) product.handle = normalizeHandle(mapped.handle);
+  if (mapped.handle) product.handle = String(mapped.handle).trim();
   if (mapped.product_type) product.productType = mapped.product_type;
 
   // Add metafields to create input
@@ -1132,11 +1132,10 @@ function groupRowsByHandle(products: ProductRow[], mappings: AttributeMapping[])
 
   for (const product of products) {
     const mapped = applyMappings(product.raw_data, mappings);
-    // Use mapped handle if available, otherwise generate a unique one from title or SKU
-    const handle = normalizeHandle(mapped.handle)
-      || normalizeHandle(mapped.title)
-      || normalizeHandle(product.sku)
-      || `sku-${product.sku.toLowerCase()}`;
+    // Use the EXACT handle from feed if mapped, otherwise each product is its own group by SKU
+    // NEVER group by title — different products with similar titles get merged incorrectly
+    const rawHandle = mapped.handle ? String(mapped.handle).trim() : '';
+    const handle = rawHandle || ('sku-' + product.sku);
 
     const existing = groups.get(handle) || [];
     existing.push(product);
