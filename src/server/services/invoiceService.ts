@@ -95,7 +95,7 @@ export async function generateInvoicePDF(
     // ── Meta cards ─────────────────────────────────────────────
     const mY = dY + 16;
     const cardW = (cW - 30) / 2;
-    const cardH = 110;
+    const cardH = 220;
 
     // Left: Invoice Details
     doc.rect(mg, mY, cardW, cardH).lineWidth(0.5).strokeColor(C.border).fillAndStroke(C.bgLight, C.border);
@@ -123,9 +123,9 @@ export async function generateInvoicePDF(
       .text(invoice.client_name, rX + 14, mY + 26, { width: cardW - 28 });
     doc.fontSize(8.5).font('Helvetica').fillColor(C.textLight);
     let bY = mY + 42;
-    if (invoice.client_address) { doc.text(invoice.client_address, rX + 14, bY, { width: cardW - 28 }); bY += 13; }
-    if (invoice.client_phone) { doc.text(invoice.client_phone, rX + 14, bY); bY += 13; }
-    if (invoice.client_email) { doc.text(invoice.client_email, rX + 14, bY); bY += 13; }
+    if (invoice.client_address) { doc.text(invoice.client_address, rX + 14, bY, { width: cardW - 28 }); bY += 26; }
+    if (invoice.client_phone) { doc.text(invoice.client_phone, rX + 14, bY); bY += 15; }
+    if (invoice.client_email) { doc.text(invoice.client_email, rX + 14, bY); bY += 15; }
     if (invoice.client_tax_id) { doc.text('Tax ID: ' + invoice.client_tax_id, rX + 14, bY); }
 
     // ── Line items table ──────────────────────────────────────
@@ -202,13 +202,19 @@ export async function generateInvoicePDF(
     }
 
     // ── Footer ─────────────────────────────────────────────────
-    const fY = pageH - 40;
-    doc.rect(0, fY - 3, pageW, 3).fill(C.accent);
-    doc.rect(0, fY, pageW, 40).fill(C.primary);
-    doc.fontSize(8).font('Helvetica').fillColor(C.textMuted)
-      .text('Thank you for your business!', mg, fY + 14, { width: cW / 2 });
-    doc.fillColor(C.textMuted)
-      .text(settings.company_name || 'E-Sellers', mg, fY + 14, { width: cW, align: 'right' });
+    const fH = 50;
+    const fY = pageH - fH;
+    doc.rect(0, fY, pageW, fH).fill(C.accent);
+    doc.fontSize(8).font('Helvetica-Bold').fillColor(C.white)
+      .text('info@e-sellers.net', mg, fY + 12);
+    doc.font('Helvetica').text('+201000564100', mg, fY + 24);
+    doc.font('Helvetica-Bold').fillColor(C.white)
+      .text('www.e-sellers.net', mg + cW * 0.35, fY + 12);
+    doc.font('Helvetica').text('sync-engine.e-sellers.net', mg + cW * 0.35, fY + 24);
+    doc.font('Helvetica-Bold').fillColor(C.white)
+      .text('Thank you for your business!', mg, fY + 12, { width: cW, align: 'right' });
+    doc.font('Helvetica').fillColor(C.white)
+      .text(settings.company_name || 'E-Sellers', mg, fY + 24, { width: cW, align: 'right' });
 
     doc.end();
   });
