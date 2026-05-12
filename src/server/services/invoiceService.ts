@@ -1,4 +1,6 @@
 import PDFDocument from 'pdfkit';
+import path from 'path';
+import fs from 'fs';
 
 interface InvoiceItem {
   description: string;
@@ -28,18 +30,21 @@ interface Invoice {
 
 const C = {
   primary: '#0F172A',
-  accent: '#3B82F6',
+  accent: '#FF9500',
+  accentDark: '#E68600',
   text: '#1E293B',
   textLight: '#64748B',
   textMuted: '#94A3B8',
   border: '#E2E8F0',
   bgLight: '#F8FAFC',
-  bgStripe: '#F1F5F9',
+  bgStripe: '#FFF8EE',
   white: '#FFFFFF',
   success: '#10B981',
   warning: '#F59E0B',
   danger: '#EF4444',
 };
+
+const LOGO_PATH = path.resolve('src/server/assets/logo.png');
 
 export async function generateInvoicePDF(
   invoice: Invoice,
@@ -63,11 +68,16 @@ export async function generateInvoicePDF(
 
     // ── Header ─────────────────────────────────────────────────
     const hY = 30;
+    let logoEndX = mg;
+    if (fs.existsSync(LOGO_PATH)) {
+      doc.image(LOGO_PATH, mg, hY, { height: 36 });
+      logoEndX = mg + 44;
+    }
     doc.fontSize(22).font('Helvetica-Bold').fillColor(C.primary)
-      .text(settings.company_name || 'E-Sellers', mg, hY);
+      .text(settings.company_name || 'E-Sellers', logoEndX, hY + 6);
 
     doc.fontSize(8.5).font('Helvetica').fillColor(C.textLight);
-    let iY = hY + 30;
+    let iY = hY + 38;
     if (settings.company_address) { doc.text(settings.company_address, mg, iY); iY += 13; }
     if (settings.company_phone) { doc.text(settings.company_phone, mg, iY); iY += 13; }
     if (settings.company_email) { doc.text(settings.company_email, mg, iY); iY += 13; }
