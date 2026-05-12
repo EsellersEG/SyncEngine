@@ -139,6 +139,18 @@ async function init() {
         value TEXT NOT NULL DEFAULT '',
         updated_at TIMESTAMPTZ DEFAULT NOW()
       )`,
+      `CREATE TABLE IF NOT EXISTS tasks (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        title VARCHAR(500) NOT NULL,
+        client_id UUID REFERENCES clients(id) ON DELETE SET NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'not_started',
+        task_type VARCHAR(255),
+        comment TEXT,
+        assigned_to UUID REFERENCES users(id) ON DELETE SET NULL,
+        created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )`,
     ];
     for (const sql of migrations) {
       await client.query(sql);

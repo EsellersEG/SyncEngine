@@ -1,10 +1,23 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { query } from '../db.js';
-import { authenticate, requireAdmin, type AuthRequest } from '../middleware/auth.js';
+import { authenticate, requireAdmin, requireAdminOrEmployee, type AuthRequest } from '../middleware/auth.js';
 
 const router = Router();
 router.use(authenticate);
+
+// GET /api/users/brief — lightweight user list for task assignment (admin + employee)
+router.get('/brief', requireAdminOrEmployee, async (_req, res) => {
+  try {
+    const result = await query(
+      `SELECT id, name, role FROM users WHERE is_active = TRUE ORDER BY name`
+    );
+    return res.json(result.rows);
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to fetch users' });
+  }
+});
 
 // GET /api/users — list all users with their assigned client count
 router.get('/', requireAdmin, async (_req, res) => {

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import Modal from '../components/Modal';
 import { useAuth } from '../hooks/useAuth';
-import { Plus, UserCheck, Shield, Eye, Pencil, X } from 'lucide-react';
+import { Plus, UserCheck, Shield, Eye, Pencil, X, Briefcase } from 'lucide-react';
 interface User {
   id: string; name: string; email: string; role: string;
   is_active: boolean; created_at: string;
@@ -13,6 +13,7 @@ interface Client { id: string; name: string; slug: string; is_active: boolean; }
 function RoleBadge({ role }: { role: string }) {
   const map: Record<string, { badge: string; icon: React.ElementType }> = {
     admin: { badge: 'badge-info', icon: Shield },
+    employee: { badge: 'badge-warning', icon: Briefcase },
     client: { badge: 'badge-success', icon: UserCheck },
     viewer: { badge: 'badge-muted', icon: Eye },
   };
@@ -193,7 +194,8 @@ export default function UsersPage() {
                 <label className="label">Role</label>
                 <select className="input" value={createForm.role} onChange={e => setCreateForm(f => ({ ...f, role: e.target.value }))}>
                   <option value="admin">Administrator — Full access to everything</option>
-                  <option value="client">Client — Assigned feeds & channels only</option>
+                  <option value="employee">Employee — Manage assigned clients</option>
+                  <option value="client">Client — View own invoices only</option>
                   <option value="viewer">Viewer — Read-only on assigned items</option>
                 </select>
               </div>
@@ -226,6 +228,7 @@ export default function UsersPage() {
                   <label className="label">Role</label>
                   <select className="input" value={editForm.role} onChange={e => setEditForm(f => ({ ...f, role: e.target.value }))}>
                     <option value="admin">Administrator</option>
+                    <option value="employee">Employee</option>
                     <option value="client">Client</option>
                     <option value="viewer">Viewer</option>
                   </select>

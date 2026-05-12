@@ -227,9 +227,20 @@ router.delete('/:id', requireAdmin, async (req, res) => {
   }
 });
 
-// GET /api/invoices/:id/pdf — download PDF (admin only)
-router.get('/:id/pdf', requireAdmin, async (req: AuthRequest, res) => {
+// GET /api/invoices/:id/pdf — download PDF
+router.get('/:id/pdf', async (req: AuthRequest, res) => {
   try {
+    // Non-admin: verify invoice belongs to assigned client
+    if (req.user!.role !== 'admin') {
+      const access = await query(
+        `SELECT 1 FROM invoices i
+         JOIN user_clients uc ON uc.client_id = i.client_id AND uc.user_id = $1
+         WHERE i.id = $2`,
+        [req.user!.id, req.params.id]
+      );
+      if (!access.rows[0]) return res.status(403).json({ error: 'Access denied' });
+    }
+
     const invoiceResult = await query(
       `SELECT i.*, c.name as client_name, c.address as client_address, c.phone as client_phone, c.email as client_email, c.tax_id as client_tax_id
        FROM invoices i JOIN clients c ON c.id = i.client_id WHERE i.id = $1`,

@@ -2,20 +2,21 @@ import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import {
   LayoutDashboard, Users, Database, Zap, Settings,
-  GitBranch, ShoppingBag, Map, Package, LogOut, Activity, FileText
+  GitBranch, ShoppingBag, Map, Package, LogOut, Activity, FileText, ClipboardList
 } from 'lucide-react';
 
 const navItems = [
-  { to: '/', icon: LayoutDashboard, label: 'Dashboard', end: true },
-  { to: '/clients', icon: Users, label: 'Clients' },
-  { to: '/feeds', icon: Database, label: 'Feeds' },
-  { to: '/channels', icon: GitBranch, label: 'Channels' },
-  { to: '/products', icon: Package, label: 'Products' },
-  { to: '/mapping', icon: Map, label: 'Attribute Mapping' },
-  { to: '/automations', icon: Activity, label: 'Automations' },
-  { to: '/sync', icon: Zap, label: 'Sync Jobs' },
-  { to: '/orders', icon: ShoppingBag, label: 'Orders' },
-  { to: '/invoices', icon: FileText, label: 'Invoices' },
+  { to: '/', icon: LayoutDashboard, label: 'Dashboard', end: true, roles: ['admin', 'employee'] },
+  { to: '/clients', icon: Users, label: 'Clients', roles: ['admin', 'employee'] },
+  { to: '/feeds', icon: Database, label: 'Feeds', roles: ['admin', 'employee'] },
+  { to: '/channels', icon: GitBranch, label: 'Channels', roles: ['admin', 'employee'] },
+  { to: '/products', icon: Package, label: 'Products', roles: ['admin', 'employee'] },
+  { to: '/mapping', icon: Map, label: 'Attribute Mapping', roles: ['admin', 'employee'] },
+  { to: '/automations', icon: Activity, label: 'Automations', roles: ['admin', 'employee'] },
+  { to: '/sync', icon: Zap, label: 'Sync Jobs', roles: ['admin', 'employee'] },
+  { to: '/orders', icon: ShoppingBag, label: 'Orders', roles: ['admin', 'employee'] },
+  { to: '/tasks', icon: ClipboardList, label: 'Tasks', roles: ['admin', 'employee'] },
+  { to: '/invoices', icon: FileText, label: 'Invoices', roles: ['admin', 'employee', 'client'] },
 ];
 
 const adminItems = [
@@ -58,7 +59,7 @@ export default function Layout() {
           <div style={{ fontSize: 11, fontWeight: 600, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.08em', padding: '0 8px', marginBottom: 8 }}>
             Navigation
           </div>
-          {navItems.map(item => (
+          {navItems.filter(item => !item.roles || item.roles.includes(user?.role || '')).map(item => (
             <NavLink
               key={item.to}
               to={item.to}

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { query } from '../db.js';
-import { authenticate, requireAdmin, type AuthRequest } from '../middleware/auth.js';
+import { authenticate, requireAdmin, requireAdminOrEmployee, type AuthRequest } from '../middleware/auth.js';
 
 const router = Router();
 router.use(authenticate);
@@ -9,15 +9,30 @@ router.use(authenticate);
 router.get('/', async (req: AuthRequest, res) => {
   try {
     let result;
-    if (req.user!.role === 'admin') {
-      result = await query(
-        `SELECT c.*, u.name as created_by_name,
-          (SELECT COUNT(*) FROM feeds WHERE client_id = c.id) as feed_count,
-          (SELECT COUNT(*) FROM channels WHERE client_id = c.id) as channel_count
-         FROM clients c
-         LEFT JOIN users u ON c.created_by = u.id
-         ORDER BY c.created_at DESC`
-      );
+    if (req.user!.role === 'admin' || req.user!.role === 'employee') {
+      if (req.user!.role === 'admin') {
+        result = await query(
+          `SELECT c.*, u.name as created_by_name,
+            (SELECT COUNT(*) FROM feeds WHERE client_id = c.id) as feed_count,
+            (SELECT COUNT(*) FROM channels WHERE client_id = c.id) as channel_count
+           FROM clients c
+           LEFT JOIN users u ON c.created_by = u.id
+           ORDER BY c.created_at DESC`
+        );
+      } else {
+        // Employee sees only assigned clients
+        result = await query(
+          `SELECT c.*, u.name as created_by_name,
+            (SELECT COUNT(*) FROM feeds WHERE client_id = c.id) as feed_count,
+            (SELECT COUNT(*) FROM channels WHERE client_id = c.id) as channel_count
+           FROM clients c
+           LEFT JOIN users u ON c.created_by = u.id
+           JOIN user_clients uc ON c.id = uc.client_id AND uc.user_id = $1
+           WHERE c.is_active = TRUE
+           ORDER BY c.created_at DESC`,
+          [req.user!.id]
+        );
+      }
     } else {
       result = await query(
         `SELECT c.*, uc.role as user_role,
@@ -54,8 +69,8 @@ router.get('/:id', async (req: AuthRequest, res) => {
   }
 });
 
-// POST /api/clients — admin only
-router.post('/', requireAdmin, async (req: AuthRequest, res) => {
+// POST /api/clients — admin or employee
+router.post('/', requireAdminOrEmployee, async (req: AuthRequest, res) => {
   try {
     const { name, slug, logo_url } = req.body;
     if (!name || !slug) {

@@ -36,3 +36,11 @@ export const requireAdmin = (req: AuthRequest, res: Response, next: NextFunction
   }
   next();
 };
+
+export const requireAdminOrEmployee = (req: AuthRequest, res: Response, next: NextFunction): void => {
+  if (req.user?.role !== 'admin' && req.user?.role !== 'employee') {
+    res.status(403).json({ error: 'Forbidden: Admin or Employee access required' });
+    return;
+  }
+  next();
+};
