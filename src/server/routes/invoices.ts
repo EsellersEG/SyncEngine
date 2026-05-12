@@ -117,9 +117,9 @@ router.post('/', requireAdmin, async (req: AuthRequest, res) => {
       return res.status(400).json({ error: 'Client must have billing information (address, email, or phone). Please update the client profile first.' });
     }
 
-    // Generate invoice number
+    // Generate invoice number (starting from INV-4949)
     const countResult = await query('SELECT COUNT(*) as cnt FROM invoices');
-    const invoiceNumber = `INV-${String(parseInt(countResult.rows[0].cnt) + 1).padStart(4, '0')}`;
+    const invoiceNumber = `INV-${String(parseInt(countResult.rows[0].cnt) + 4949).padStart(4, '0')}`;
 
     // Calculate totals
     const subtotal = items.reduce((sum: number, item: { quantity: number; unit_price: number }) =>
