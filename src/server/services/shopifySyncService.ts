@@ -900,6 +900,13 @@ async function syncGroupedProduct(
 }
 
 async function createShopifyProduct(channel: Channel, sku: string, mapped: Record<string, unknown>, withImages: boolean, mappings?: AttributeMapping[], rawData?: Record<string, unknown>, shopifyDefs: Map<string, string> = new Map()) {
+  // SAFETY: Check if SKU already exists in Shopify before creating
+  const existingCheck = await getShopifyProductMapForSKUs(channel, [sku]);
+  if (existingCheck.has(sku)) {
+    console.warn(`[SyncFlow] SKU ${sku} already exists in Shopify — updating instead of creating duplicate`);
+    return; // Caller will handle as 'skipped' or next sync will update it
+  }
+
   const createMutation = `
     mutation productCreate($product: ProductCreateInput!, $media: [CreateMediaInput!]) {
       productCreate(product: $product, media: $media) {
