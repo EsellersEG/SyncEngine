@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
+import { useAuth } from '../hooks/useAuth';
 import Modal from '../components/Modal';
 import { ShoppingBag, RefreshCw, CheckCircle, Clock, XCircle, ExternalLink, X, Package, Download } from 'lucide-react';
 
@@ -44,6 +45,7 @@ function currencySymbol(code?: string): string {
 }
 
 export default function OrdersPage() {
+  const { isClient } = useAuth();
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [retrying, setRetrying] = useState<string | null>(null);
@@ -133,9 +135,11 @@ export default function OrdersPage() {
           <p className="page-subtitle">Shopify → Odoo order synchronization</p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn-secondary" onClick={handleExportCSV}>
-            <Download size={14} /> Export CSV
-          </button>
+          {!isClient && (
+            <button className="btn btn-secondary" onClick={handleExportCSV}>
+              <Download size={14} /> Export CSV
+            </button>
+          )}
           <button className="btn btn-secondary" onClick={fetchOrders}>
             <RefreshCw size={14} /> Refresh
           </button>

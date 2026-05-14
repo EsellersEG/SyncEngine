@@ -13,7 +13,7 @@ interface Client { id: string; name: string; }
 interface Feed { id: string; name: string; }
 
 export default function ProductsPage() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, isClient } = useAuth();
   const [products, setProducts] = useState<Product[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [feeds, setFeeds] = useState<Feed[]>([]);

@@ -63,7 +63,7 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// DELETE /api/products/:id — delete a single product
+// DELETE /api/products/:id — delete a single product (admin only, already enforced)
 router.delete('/:id', requireAdmin, async (req, res) => {
   try {
     const result = await query('DELETE FROM products WHERE id = $1 RETURNING id, sku', [req.params.id]);
@@ -75,7 +75,7 @@ router.delete('/:id', requireAdmin, async (req, res) => {
   }
 });
 
-// DELETE /api/products — bulk delete by feed_id, client_id, or search
+// DELETE /api/products — bulk delete by feed_id, client_id, or search (admin only, already enforced)
 router.delete('/', requireAdmin, async (req: AuthRequest, res) => {
   try {
     const { feed_id, client_id, search } = req.query;

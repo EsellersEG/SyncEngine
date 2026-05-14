@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { query } from '../db.js';
-import { authenticate, type AuthRequest } from '../middleware/auth.js';
+import { authenticate, type AuthRequest, requireOrderOwnerOrAdmin } from '../middleware/auth.js';
 import { createOdooSaleOrder, type OdooConfig } from '../services/odooService.js';
 
 const router = Router();
@@ -102,7 +102,7 @@ router.get('/:id', async (req: AuthRequest, res) => {
 });
 
 // POST /api/orders/:id/retry — retry failed order sync to Odoo
-router.post('/:id/retry', async (req: AuthRequest, res) => {
+router.post('/:id/retry', requireOrderOwnerOrAdmin, async (req: AuthRequest, res) => {
   try {
     const orderResult = await query('SELECT * FROM orders WHERE id = $1', [req.params.id]);
     const order = orderResult.rows[0];

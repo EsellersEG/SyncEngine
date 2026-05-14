@@ -1,3 +1,18 @@
+// Allow only order owner or admin
+import { query } from '../db.js';
+
+export const requireOrderOwnerOrAdmin = async (req: AuthRequest, res: Response, next: NextFunction) => {
+  const orderId = req.params.id;
+  if (req.user?.role === 'admin') return next();
+  if (!orderId) return res.status(400).json({ error: 'Order ID required' });
+  const result = await query('SELECT client_id FROM orders WHERE id = $1', [orderId]);
+  if (!result.rows[0]) return res.status(404).json({ error: 'Order not found' });
+  const clientId = result.rows[0].client_id;
+  // Check if user is linked to this client
+  const uc = await query('SELECT 1 FROM user_clients WHERE user_id = $1 AND client_id = $2', [req.user!.id, clientId]);
+  if (uc.rows.length) return next();
+  return res.status(403).json({ error: 'Forbidden: Not your order' });
+};
 import jwt from 'jsonwebtoken';
 import type { Request, Response, NextFunction } from 'express';
 
