@@ -111,7 +111,7 @@ router.post('/:id/retry', requireOrderOwnerOrAdmin, async (req: AuthRequest, res
 
     // Get Odoo config from feed
     const feedResult = await query(
-      "SELECT odoo_url, odoo_database, odoo_username, odoo_api_key, odoo_search_by, odoo_warehouse_id, order_tax_included_percent FROM feeds WHERE client_id = $1 AND type = 'odoo' LIMIT 1",
+      "SELECT odoo_url, odoo_database, odoo_username, odoo_api_key, odoo_search_by, odoo_warehouse_id, order_tax_included_percent, odoo_force_order FROM feeds WHERE client_id = $1 AND type = 'odoo' LIMIT 1",
       [order.client_id]
     );
     const odooFeed = feedResult.rows[0];
@@ -125,6 +125,7 @@ router.post('/:id/retry', requireOrderOwnerOrAdmin, async (req: AuthRequest, res
       productSearchBy: odooFeed.odoo_search_by || 'automatic',
       warehouseId: odooFeed.odoo_warehouse_id || undefined,
       orderTaxIncludedPercent: odooFeed.order_tax_included_percent ? Number(odooFeed.order_tax_included_percent) : undefined,
+      forceOrder: !!odooFeed.odoo_force_order,
     };
 
     // Get channel for Shopify API access (needed for EAN barcode lookup)

@@ -12,6 +12,7 @@ export interface OdooConfig {
   productSearchBy?: 'automatic' | 'sku' | 'ean' | 'name';
   warehouseId?: number; // Odoo warehouse ID to scope qty_available
   orderTaxIncludedPercent?: number; // If set, Shopify prices include this tax % — deduct before sending to Odoo
+  forceOrder?: boolean; // If true, create order even if stock is insufficient (leave as quotation if confirm fails)
 }
 
 interface FeedRow {
@@ -470,7 +471,11 @@ export async function createOdooSaleOrder(
   try {
     await odooExecute(config, uid, 'sale.order', 'action_confirm', [[orderId]]);
   } catch (err) {
-    console.warn(`[OdooOrder] Could not auto-confirm order ${orderId}:`, err);
+    if (config.forceOrder) {
+      console.warn(`[OdooOrder] Confirmation failed for order ${orderId} (forceOrder=true, leaving as quotation):`, err);
+    } else {
+      throw err;
+    }
   }
 
   // 5. Get the order name

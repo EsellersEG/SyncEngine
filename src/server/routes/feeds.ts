@@ -47,6 +47,7 @@ router.post('/', async (req: AuthRequest, res) => {
       odoo_warehouse_name,
       sync_interval_minutes,
       order_tax_included_percent,
+      odoo_force_order,
     } = req.body;
     if (!client_id || !name) {
       return res.status(400).json({ error: 'client_id and name required' });
@@ -61,10 +62,10 @@ router.post('/', async (req: AuthRequest, res) => {
       ? odoo_search_by
       : 'automatic';
     const result = await query(
-      `INSERT INTO feeds (client_id, name, type, spreadsheet_id, sheet_name, header_row, service_account_json, odoo_url, odoo_database, odoo_username, odoo_api_key, odoo_search_by, odoo_warehouse_id, odoo_warehouse_name, sync_interval_minutes, order_tax_included_percent)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+      `INSERT INTO feeds (client_id, name, type, spreadsheet_id, sheet_name, header_row, service_account_json, odoo_url, odoo_database, odoo_username, odoo_api_key, odoo_search_by, odoo_warehouse_id, odoo_warehouse_name, sync_interval_minutes, order_tax_included_percent, odoo_force_order)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
        RETURNING *`,
-      [client_id, name, type, spreadsheet_id || '', sheet_name, header_row, service_account_json || null, odoo_url || null, odoo_database || null, odoo_username || null, odoo_api_key || null, normalizedOdooSearchBy, odoo_warehouse_id ? parseInt(odoo_warehouse_id) : null, odoo_warehouse_name || null, sync_interval_minutes || null, order_tax_included_percent ? parseFloat(order_tax_included_percent) : null]
+      [client_id, name, type, spreadsheet_id || '', sheet_name, header_row, service_account_json || null, odoo_url || null, odoo_database || null, odoo_username || null, odoo_api_key || null, normalizedOdooSearchBy, odoo_warehouse_id ? parseInt(odoo_warehouse_id) : null, odoo_warehouse_name || null, sync_interval_minutes || null, order_tax_included_percent ? parseFloat(order_tax_included_percent) : null, !!odoo_force_order]
     );
     return res.status(201).json(result.rows[0]);
   } catch (err) {
@@ -92,6 +93,7 @@ router.patch('/:id', async (req, res) => {
       odoo_warehouse_name,
       sync_interval_minutes,
       order_tax_included_percent,
+      odoo_force_order,
     } = req.body;
     const normalizedOdooSearchBy = odoo_search_by === 'sku' || odoo_search_by === 'ean' || odoo_search_by === 'name'
       ? odoo_search_by
@@ -115,9 +117,10 @@ router.patch('/:id', async (req, res) => {
         odoo_warehouse_name = COALESCE($13, odoo_warehouse_name),
         sync_interval_minutes = $14,
         order_tax_included_percent = $15,
+        odoo_force_order = COALESCE($16, odoo_force_order),
         updated_at = NOW()
-       WHERE id = $16 RETURNING *`,
-      [name, type, spreadsheet_id, sheet_name, header_row, is_active, odoo_url, odoo_database, odoo_username, odoo_api_key, normalizedOdooSearchBy, odoo_warehouse_id !== undefined ? (odoo_warehouse_id ? parseInt(odoo_warehouse_id) : null) : null, odoo_warehouse_name || null, sync_interval_minutes ?? null, order_tax_included_percent !== undefined ? (order_tax_included_percent ? parseFloat(order_tax_included_percent) : null) : null, req.params.id]
+       WHERE id = $17 RETURNING *`,
+      [name, type, spreadsheet_id, sheet_name, header_row, is_active, odoo_url, odoo_database, odoo_username, odoo_api_key, normalizedOdooSearchBy, odoo_warehouse_id !== undefined ? (odoo_warehouse_id ? parseInt(odoo_warehouse_id) : null) : null, odoo_warehouse_name || null, sync_interval_minutes ?? null, order_tax_included_percent !== undefined ? (order_tax_included_percent ? parseFloat(order_tax_included_percent) : null) : null, odoo_force_order !== undefined ? !!odoo_force_order : null, req.params.id]
     );
     if (!result.rows[0]) return res.status(404).json({ error: 'Feed not found' });
     return res.json(result.rows[0]);

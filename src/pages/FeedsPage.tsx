@@ -14,6 +14,7 @@ interface Feed {
   odoo_warehouse_id?: number | null;
   odoo_warehouse_name?: string | null;
   order_tax_included_percent?: number | null;
+  odoo_force_order?: boolean;
   sync_interval_minutes?: number | null;
 }
 interface Client { id: string; name: string; }
@@ -40,6 +41,7 @@ export default function FeedsPage() {
     odoo_warehouse_id: '',
     odoo_warehouse_name: '',
     order_tax_included_percent: '',
+    odoo_force_order: false,
     sync_interval_minutes: '',
   });
   const [error, setError] = useState('');
@@ -81,6 +83,7 @@ export default function FeedsPage() {
         payload.odoo_warehouse_id = form.odoo_warehouse_id || null;
         payload.odoo_warehouse_name = form.odoo_warehouse_name || null;
         payload.order_tax_included_percent = form.order_tax_included_percent || null;
+        payload.odoo_force_order = form.odoo_force_order;
       }
 
       if (editingFeed) {
@@ -177,7 +180,7 @@ export default function FeedsPage() {
 
   function openCreateModal() {
     setEditingFeed(null);
-    setForm({ client_id: clientId || '', name: '', type: 'google_sheets', spreadsheet_id: '', sheet_name: 'Sheet1', header_row: 1, odoo_url: '', odoo_database: '', odoo_username: '', odoo_api_key: '', odoo_search_by: 'automatic', odoo_warehouse_id: '', odoo_warehouse_name: '', order_tax_included_percent: '', sync_interval_minutes: '' });
+    setForm({ client_id: clientId || '', name: '', type: 'google_sheets', spreadsheet_id: '', sheet_name: 'Sheet1', header_row: 1, odoo_url: '', odoo_database: '', odoo_username: '', odoo_api_key: '', odoo_search_by: 'automatic', odoo_warehouse_id: '', odoo_warehouse_name: '', order_tax_included_percent: '', odoo_force_order: false, sync_interval_minutes: '' });
     setError('');
     setTestResult(null);
     setShowModal(true);
@@ -279,6 +282,7 @@ export default function FeedsPage() {
                             odoo_warehouse_id: feed.odoo_warehouse_id ? String(feed.odoo_warehouse_id) : '',
                             odoo_warehouse_name: feed.odoo_warehouse_name || '',
                             order_tax_included_percent: feed.order_tax_included_percent ? String(feed.order_tax_included_percent) : '',
+                            odoo_force_order: !!feed.odoo_force_order,
                             sync_interval_minutes: feed.sync_interval_minutes ? String(feed.sync_interval_minutes) : '',
                           });
                           setError('');
@@ -453,6 +457,15 @@ export default function FeedsPage() {
                       onChange={e => setForm(f => ({ ...f, order_tax_included_percent: e.target.value }))} />
                     <span style={{ fontSize: 11, color: '#64748b' }}>
                       If Shopify prices include VAT, enter the rate (e.g. 14). Orders sent to Odoo will have this % deducted so Odoo can add its own tax.
+                    </span>
+                  </div>
+                  <div className="form-group" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13 }}>
+                      <input type="checkbox" checked={form.odoo_force_order} onChange={e => setForm(f => ({ ...f, odoo_force_order: e.target.checked }))} />
+                      Allow orders without stock
+                    </label>
+                    <span style={{ fontSize: 11, color: '#64748b' }}>
+                      If enabled, orders will be created as quotations in Odoo even when stock is insufficient.
                     </span>
                   </div>
                   <button type="button" className="btn btn-secondary btn-sm" onClick={handleTestOdoo} disabled={testing || !form.odoo_url || !form.odoo_database || !form.odoo_username || (!form.odoo_api_key && !editingFeed?.odoo_api_key)}>
