@@ -14,7 +14,7 @@ interface SyncJob {
 }
 interface SyncLog {
   id: string; sku: string; action: string; message: string; created_at: string;
-  details?: { stock_from?: number | null; stock_to?: number | null; price_from?: string | null; price_to?: string | null };
+  details?: { stock_from?: number | null; stock_to?: number | null; price_from?: string | null; price_to?: string | null; warehouse_name?: string | null };
 }
 interface FilterRule {
   field: string; operator: string; value: string; logic?: string;
@@ -76,6 +76,7 @@ export default function SyncPage() {
   const [feedHeaders, setFeedHeaders] = useState<string[]>([]);
   const [filterPreview, setFilterPreview] = useState<{ total: number; matched: number; filtered: number } | null>(null);
   const [mappingCount, setMappingCount] = useState<number | null>(null);
+  const [includeImages, setIncludeImages] = useState(false);
 
   // History state
   const [historyJobs, setHistoryJobs] = useState<SyncJob[]>([]);
@@ -135,6 +136,9 @@ export default function SyncPage() {
       const body: Record<string, unknown> = { ...config };
       if (config.preset === 'custom') body.fields = customFields;
       if (filterRules.length > 0) body.filter_rules = filterRules;
+      // Include images toggle for Amazon
+      const selectedCh = channels.find(ch => ch.id === config.channel_id);
+      if (selectedCh?.type === 'amazon' && includeImages) body.include_images = true;
       await api.post('/sync/start', body);
       const updated = await api.get('/sync/jobs?limit=50') as SyncJob[];
       setJobs(updated);
@@ -218,7 +222,7 @@ export default function SyncPage() {
     setFilterRules(prev => prev.filter((_, i) => i !== index));
   }
 
-  const shopifyChannels = channels.filter(ch => ch.type === 'shopify');
+  const shopifyChannels = channels.filter(ch => ch.type === 'shopify' || ch.type === 'noon' || ch.type === 'amazon');
 
   function getDuration(job: SyncJob): string {
     if (!job.started_at) return '-';
@@ -598,10 +602,10 @@ export default function SyncPage() {
 
           <form onSubmit={handleStart} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <div className="form-group">
-              <label className="label">Channel (Shopify Store)</label>
+              <label className="label">Channel</label>
               <select className="input" value={config.channel_id} onChange={e => setConfig(c => ({ ...c, channel_id: e.target.value }))} required>
                 <option value="">Select channel...</option>
-                {shopifyChannels.map(ch => <option key={ch.id} value={ch.id}>{ch.name}</option>)}
+                {shopifyChannels.map(ch => <option key={ch.id} value={ch.id}>{ch.type === 'noon' ? '🌙' : ch.type === 'amazon' ? '📦' : '🛍️'} {ch.name}</option>)}
               </select>
             </div>
             <div className="form-group">
@@ -670,6 +674,25 @@ export default function SyncPage() {
               </button>
             )}
 
+            {/* Include Images Toggle (Amazon only) */}
+            {(() => {
+              const selectedCh = channels.find(ch => ch.id === config.channel_id);
+              return selectedCh?.type === 'amazon' && (config.preset === 'sync_all' || config.preset === 'content_only' || config.preset === 'price_stock_meta') ? (
+                <label style={{
+                  display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderRadius: 10,
+                  border: `1px solid ${includeImages ? 'rgba(255,153,0,0.4)' : 'rgba(79,110,247,0.1)'}`,
+                  background: includeImages ? 'rgba(255,153,0,0.08)' : 'transparent',
+                  cursor: 'pointer', fontSize: 13, color: '#e2e8f0',
+                }}>
+                  <input type="checkbox" checked={includeImages} onChange={e => setIncludeImages(e.target.checked)} style={{ accentColor: '#ff9900' }} />
+                  <div>
+                    <div style={{ fontWeight: 600 }}>Include Images</div>
+                    <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>Upload product images to Amazon (requires publicly accessible HTTPS URLs)</div>
+                  </div>
+                </label>
+              ) : null;
+            })()}
+
             {/* No Mapping Warning */}
             {mappingCount === 0 && config.feed_id && config.channel_id && (
               <div style={{
@@ -680,7 +703,7 @@ export default function SyncPage() {
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 13, fontWeight: 600, color: '#f59e0b' }}>No mappings configured</div>
                   <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 3, marginBottom: 8 }}>
-                    Sync requires attribute mappings to know which columns map to which Shopify fields.
+                    Sync requires attribute mappings to know which columns map to which channel fields.
                   </div>
                   <button type="button" className="btn btn-sm" style={{ background: 'rgba(245,158,11,0.2)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.3)', fontSize: 12 }}
                     onClick={async () => {

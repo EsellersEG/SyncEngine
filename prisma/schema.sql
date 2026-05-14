@@ -65,7 +65,7 @@ CREATE TABLE channels (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   client_id UUID REFERENCES clients(id) ON DELETE CASCADE,
   name VARCHAR(255) NOT NULL,
-  type VARCHAR(50) NOT NULL, -- 'shopify', 'amazon', 'bol', 'kaufland', 'cdiscount'
+  type VARCHAR(50) NOT NULL, -- 'shopify', 'noon', 'amazon', 'bol', 'kaufland', 'cdiscount'
   status VARCHAR(50) DEFAULT 'active', -- 'active', 'paused', 'error'
   -- Shopify specific
   shopify_store_url TEXT,
@@ -73,6 +73,14 @@ CREATE TABLE channels (
   shopify_api_version VARCHAR(20) DEFAULT '2024-10',
   -- Common
   settings JSONB DEFAULT '{}',
+  -- Noon specific
+  noon_credentials_json TEXT,
+  noon_warehouse_code VARCHAR(100),
+  noon_country_code VARCHAR(10),
+  -- Amazon specific
+  amazon_credentials_json TEXT,
+  amazon_marketplace_ids TEXT,
+  amazon_region VARCHAR(10),
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );

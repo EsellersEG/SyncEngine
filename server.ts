@@ -18,6 +18,8 @@ import webhookRoutes from './src/server/routes/webhooks.js';
 import automationRoutes from './src/server/routes/automations.js';
 import invoiceRoutes from './src/server/routes/invoices.js';
 import taskRoutes from './src/server/routes/tasks.js';
+import noonRoutes from './src/server/routes/noon.js';
+import amazonRoutes from './src/server/routes/amazon.js';
 import { startScheduler } from './src/server/services/scheduler.js';
 import { query } from './src/server/db.js';
 
@@ -54,6 +56,8 @@ app.use('/api/orders', orderRoutes);
 app.use('/api/automations', automationRoutes);
 app.use('/api/invoices', invoiceRoutes);
 app.use('/api/tasks', taskRoutes);
+app.use('/api/noon', noonRoutes);
+app.use('/api/amazon', amazonRoutes);
 app.use('/webhooks', webhookRoutes);
 
 // ── Health Check ───────────────────────────────────────────────────────────

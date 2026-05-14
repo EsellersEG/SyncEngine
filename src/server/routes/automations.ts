@@ -53,6 +53,12 @@ router.post('/', async (req, res) => {
     if (action_type === 'sync_to_shopify' && (!feed_id || !channel_id)) {
       return res.status(400).json({ error: 'feed_id and channel_id required for sync_to_shopify automations' });
     }
+    if (action_type === 'sync_to_noon' && (!feed_id || !channel_id)) {
+      return res.status(400).json({ error: 'feed_id and channel_id required for sync_to_noon automations' });
+    }
+    if (action_type === 'sync_to_amazon' && (!feed_id || !channel_id)) {
+      return res.status(400).json({ error: 'feed_id and channel_id required for sync_to_amazon automations' });
+    }
     const normalizedRoundingMode = rounding_mode === 'up' || rounding_mode === 'down' ? rounding_mode : 'none';
     const result = await query(
       `INSERT INTO automations (client_id, name, trigger_type, action_type, feed_id, channel_id, interval_minutes, price_adjustment_percent, rounding_mode)

@@ -36,6 +36,34 @@ const SHOPIFY_FIELDS = [
   { value: 'variant_image', label: 'Variant Image URL', group: 'Media' },
 ];
 
+const NOON_FIELDS = [
+  { value: 'partner_sku', label: 'Partner SKU', group: 'Core' },
+  { value: 'qty', label: 'Stock Quantity', group: 'Core' },
+  { value: 'price', label: 'Price', group: 'Pricing' },
+  { value: 'msrp', label: 'MSRP (Compare-at)', group: 'Pricing' },
+  { value: 'sale_price', label: 'Sale Price', group: 'Pricing' },
+  { value: 'is_active', label: 'Is Active', group: 'Core' },
+  { value: 'title', label: 'Title', group: 'Content' },
+  { value: 'title_ar', label: 'Title (Arabic)', group: 'Content' },
+  { value: 'brand', label: 'Brand', group: 'Content' },
+  { value: 'category', label: 'Category', group: 'Content' },
+  { value: 'description', label: 'Description', group: 'Content' },
+  { value: 'bullet_point_1', label: 'Bullet Point 1', group: 'Content' },
+  { value: 'bullet_point_2', label: 'Bullet Point 2', group: 'Content' },
+  { value: 'bullet_point_3', label: 'Bullet Point 3', group: 'Content' },
+  { value: 'bullet_point_4', label: 'Bullet Point 4', group: 'Content' },
+  { value: 'bullet_point_5', label: 'Bullet Point 5', group: 'Content' },
+  { value: 'search_keywords', label: 'Search Keywords', group: 'Content' },
+  { value: 'image_1', label: 'Image 1', group: 'Media' },
+  { value: 'image_2', label: 'Image 2', group: 'Media' },
+  { value: 'image_3', label: 'Image 3', group: 'Media' },
+  { value: 'image_4', label: 'Image 4', group: 'Media' },
+  { value: 'image_5', label: 'Image 5', group: 'Media' },
+  { value: 'image_6', label: 'Image 6', group: 'Media' },
+  { value: 'image_7', label: 'Image 7', group: 'Media' },
+  { value: 'image_8', label: 'Image 8', group: 'Media' },
+];
+
 // Maps common feed column names (lowercased) to target_field
 const AUTO_MAP_RULES: Record<string, string> = {
   'title': 'title',
@@ -104,6 +132,68 @@ const AUTO_MAP_RULES: Record<string, string> = {
   'variant_image': 'variant_image',
 };
 
+// Noon-specific auto-map rules
+const NOON_AUTO_MAP_RULES: Record<string, string> = {
+  'sku': 'partner_sku', 'partner_sku': 'partner_sku', 'variant_sku': 'partner_sku', 'variant sku': 'partner_sku', 'default_code': 'partner_sku',
+  'quantity': 'qty', 'stock': 'qty', 'inventory_quantity': 'qty', 'qty': 'qty', 'qty_available': 'qty', 'free_qty': 'qty', 'virtual_available': 'qty',
+  'price': 'price', 'variant_price': 'price', 'variant price': 'price', 'list_price': 'price',
+  'msrp': 'msrp', 'compare_at_price': 'msrp', 'compare at price': 'msrp',
+  'sale_price': 'sale_price', 'sale price': 'sale_price',
+  'title': 'title', 'name': 'title',
+  'description': 'description', 'body_html': 'description', 'body html': 'description', 'description_sale': 'description',
+  'brand': 'brand', 'vendor': 'brand',
+  'image src': 'image_1', 'image_src': 'image_1', 'image url': 'image_1', 'image_url': 'image_1',
+  'status': 'is_active', 'is_active': 'is_active', 'active': 'is_active',
+  'tags': 'search_keywords', 'search_keywords': 'search_keywords',
+};
+
+// Amazon-specific auto-map rules
+const AMAZON_AUTO_MAP_RULES: Record<string, string> = {
+  'sku': 'sku', 'variant_sku': 'sku', 'variant sku': 'sku', 'default_code': 'sku',
+  'title': 'item_name', 'name': 'item_name', 'item_name': 'item_name',
+  'description': 'product_description', 'body_html': 'product_description', 'body html': 'product_description', 'product_description': 'product_description', 'description_sale': 'product_description',
+  'brand': 'brand', 'vendor': 'brand',
+  'price': 'price', 'variant_price': 'price', 'variant price': 'price', 'list_price': 'price',
+  'msrp': 'msrp', 'compare_at_price': 'msrp', 'compare at price': 'msrp',
+  'sale_price': 'sale_price', 'sale price': 'sale_price',
+  'quantity': 'fulfillment_availability', 'stock': 'fulfillment_availability', 'inventory_quantity': 'fulfillment_availability',
+  'qty': 'fulfillment_availability', 'qty_available': 'fulfillment_availability', 'free_qty': 'fulfillment_availability', 'virtual_available': 'fulfillment_availability',
+  'bullet_point_1': 'bullet_point_1', 'bullet point 1': 'bullet_point_1',
+  'bullet_point_2': 'bullet_point_2', 'bullet point 2': 'bullet_point_2',
+  'bullet_point_3': 'bullet_point_3', 'bullet point 3': 'bullet_point_3',
+  'bullet_point_4': 'bullet_point_4', 'bullet point 4': 'bullet_point_4',
+  'bullet_point_5': 'bullet_point_5', 'bullet point 5': 'bullet_point_5',
+  'image src': 'main_product_image', 'image_src': 'main_product_image', 'image url': 'main_product_image', 'image_url': 'main_product_image',
+  'image_2': 'other_product_image_1', 'image_3': 'other_product_image_2', 'image_4': 'other_product_image_3',
+  'image_5': 'other_product_image_4', 'image_6': 'other_product_image_5', 'image_7': 'other_product_image_6', 'image_8': 'other_product_image_7',
+  'tags': 'search_terms', 'search_terms': 'search_terms', 'search keywords': 'search_terms', 'search_keywords': 'search_terms',
+};
+
+const AMAZON_FIELDS = [
+  { value: 'sku', label: 'SKU', group: 'Core' },
+  { value: 'item_name', label: 'Title', group: 'Content' },
+  { value: 'product_description', label: 'Description', group: 'Content' },
+  { value: 'brand', label: 'Brand', group: 'Content' },
+  { value: 'search_terms', label: 'Search Terms', group: 'Content' },
+  { value: 'price', label: 'Price', group: 'Pricing' },
+  { value: 'msrp', label: 'MSRP (List Price)', group: 'Pricing' },
+  { value: 'sale_price', label: 'Sale Price', group: 'Pricing' },
+  { value: 'fulfillment_availability', label: 'Stock Quantity', group: 'Inventory' },
+  { value: 'bullet_point_1', label: 'Bullet Point 1', group: 'Content' },
+  { value: 'bullet_point_2', label: 'Bullet Point 2', group: 'Content' },
+  { value: 'bullet_point_3', label: 'Bullet Point 3', group: 'Content' },
+  { value: 'bullet_point_4', label: 'Bullet Point 4', group: 'Content' },
+  { value: 'bullet_point_5', label: 'Bullet Point 5', group: 'Content' },
+  { value: 'main_product_image', label: 'Main Image', group: 'Media' },
+  { value: 'other_product_image_1', label: 'Image 2', group: 'Media' },
+  { value: 'other_product_image_2', label: 'Image 3', group: 'Media' },
+  { value: 'other_product_image_3', label: 'Image 4', group: 'Media' },
+  { value: 'other_product_image_4', label: 'Image 5', group: 'Media' },
+  { value: 'other_product_image_5', label: 'Image 6', group: 'Media' },
+  { value: 'other_product_image_6', label: 'Image 7', group: 'Media' },
+  { value: 'other_product_image_7', label: 'Image 8', group: 'Media' },
+];
+
 export default function MappingPage() {
   const [feeds, setFeeds] = useState<Feed[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -154,9 +244,11 @@ export default function MappingPage() {
   function autoMapHeaders(headers: string[]): Mapping[] {
     const result: Mapping[] = [];
     const usedTargets = new Set<string>();
+    const selectedCh = channels.find(ch => ch.id === selectedChannel);
+    const rules = selectedCh?.type === 'amazon' ? AMAZON_AUTO_MAP_RULES : selectedCh?.type === 'noon' ? NOON_AUTO_MAP_RULES : AUTO_MAP_RULES;
     for (const header of headers) {
       const key = header.toLowerCase().trim();
-      const target = AUTO_MAP_RULES[key];
+      const target = rules[key];
       if (target && !usedTargets.has(target)) {
         result.push({ feed_column: header, target_field: target });
         usedTargets.add(target);
@@ -174,7 +266,8 @@ export default function MappingPage() {
   }
 
   function addMapping() {
-    setMappings(prev => [...prev, { feed_column: feedHeaders[0] || '', target_field: 'title' }]);
+    const defaultTarget = selectedChannelObj?.type === 'noon' ? 'partner_sku' : 'title';
+    setMappings(prev => [...prev, { feed_column: feedHeaders[0] || '', target_field: defaultTarget }]);
   }
 
   function removeMapping(idx: number) {
@@ -207,8 +300,10 @@ export default function MappingPage() {
     }
   }
 
-  // Group shopify fields
-  const fieldGroups = SHOPIFY_FIELDS.reduce<Record<string, typeof SHOPIFY_FIELDS>>((acc, f) => {
+  // Group target fields by channel type
+  const selectedChannelObj = channels.find(ch => ch.id === selectedChannel);
+  const activeFields = selectedChannelObj?.type === 'amazon' ? AMAZON_FIELDS : selectedChannelObj?.type === 'noon' ? NOON_FIELDS : SHOPIFY_FIELDS;
+  const fieldGroups = activeFields.reduce<Record<string, typeof SHOPIFY_FIELDS>>((acc, f) => {
     if (!acc[f.group]) acc[f.group] = [];
     acc[f.group].push(f);
     return acc;
@@ -219,7 +314,7 @@ export default function MappingPage() {
       <div className="page-header">
         <div>
           <h1 className="page-title">Attribute Mapping</h1>
-          <p className="page-subtitle">Map feed columns to Shopify fields for synchronization</p>
+          <p className="page-subtitle">Map feed columns to channel fields for synchronization</p>
         </div>
         {selectedFeed && selectedChannel && mappings.length > 0 && (
           <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
@@ -243,7 +338,7 @@ export default function MappingPage() {
             <label className="label">Target Channel</label>
             <select className="input" value={selectedChannel} onChange={e => setSelectedChannel(e.target.value)}>
               <option value="">Select channel...</option>
-              {channels.filter(ch => ch.type === 'shopify').map(ch => <option key={ch.id} value={ch.id}>{ch.name}</option>)}
+              {channels.filter(ch => ch.type === 'shopify' || ch.type === 'noon' || ch.type === 'amazon').map(ch => <option key={ch.id} value={ch.id}>{ch.type === 'noon' ? '🌙' : ch.type === 'amazon' ? '📦' : '🛍️'} {ch.name}</option>)}
             </select>
           </div>
         </div>
@@ -290,7 +385,7 @@ export default function MappingPage() {
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 40px 1fr 36px', gap: 10, padding: '0 4px' }}>
                   <div style={{ fontSize: 11, fontWeight: 600, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Feed Column</div>
                   <div />
-                  <div style={{ fontSize: 11, fontWeight: 600, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Shopify Field</div>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Target Field</div>
                   <div />
                 </div>
                 {mappings.map((m, idx) => (

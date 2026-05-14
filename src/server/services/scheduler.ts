@@ -7,6 +7,8 @@
 import { query } from '../db.js';
 import { importFeedProducts } from './feedService.js';
 import { runSyncJob } from './shopifySyncService.js';
+import { runNoonSyncJob } from './noonSyncService.js';
+import { runAmazonSyncJob } from './amazonSyncService.js';
 import { getOdooOrderStates, type OdooConfig } from './odooService.js';
 
 let schedulerInterval: ReturnType<typeof setInterval> | null = null;
@@ -25,6 +27,8 @@ export function startScheduler() {
           f.spreadsheet_id, f.sheet_name, f.header_row, f.service_account_json,
           f.odoo_url, f.odoo_database, f.odoo_username, f.odoo_api_key,
           ch.name as channel_name, ch.shopify_store_url, ch.shopify_access_token, ch.shopify_api_version, ch.settings,
+          ch.type as channel_type, ch.noon_credentials_json, ch.noon_warehouse_code, ch.noon_country_code,
+          ch.amazon_credentials_json, ch.amazon_marketplace_ids, ch.amazon_region,
           c.name as client_name
          FROM automations a
          LEFT JOIN feeds f ON a.feed_id = f.id
@@ -87,6 +91,70 @@ export function startScheduler() {
             }).catch(err => {
               console.error(`[Scheduler] Sync job ${jobId} failed:`, err);
             });
+          } else if (automation.action_type === 'sync_to_noon' && automation.channel_id && automation.feed_id) {
+            console.log(`[Scheduler] Running automation: ${automation.name} (sync to Noon ${automation.channel_name})`);
+            const preset = 'price_stock';
+            const jobResult = await query(
+              `INSERT INTO sync_jobs (client_id, channel_id, feed_id, status, preset, total_products)
+               VALUES ($1, $2, $3, 'pending', $4, 0)
+               RETURNING id`,
+              [automation.client_id, automation.channel_id, automation.feed_id, preset]
+            );
+            const jobId = jobResult.rows[0].id;
+            // Load Noon channel data
+            const noonChResult = await query(
+              'SELECT id, client_id, noon_credentials_json, noon_warehouse_code, noon_country_code, settings FROM channels WHERE id = $1',
+              [automation.channel_id]
+            );
+            const noonCh = noonChResult.rows[0];
+            if (noonCh && noonCh.noon_credentials_json) {
+              runNoonSyncJob({
+                jobId,
+                channel: {
+                  id: noonCh.id,
+                  client_id: noonCh.client_id,
+                  noon_credentials_json: noonCh.noon_credentials_json,
+                  noon_warehouse_code: noonCh.noon_warehouse_code,
+                  noon_country_code: noonCh.noon_country_code,
+                  settings: noonCh.settings,
+                },
+                feedId: automation.feed_id,
+                preset,
+                priceAdjustmentPercent: Number(automation.price_adjustment_percent || 0),
+                priceRoundingMode: automation.rounding_mode === 'up' || automation.rounding_mode === 'down' ? automation.rounding_mode : 'none',
+              }).catch(err => {
+                console.error(`[Scheduler] Noon sync job ${jobId} failed:`, err);
+              });
+            }
+          } else if (automation.action_type === 'sync_to_amazon' && automation.channel_id && automation.feed_id) {
+            console.log(`[Scheduler] Running automation: ${automation.name} (sync to Amazon ${automation.channel_name})`);
+            const preset = automation.feed_type === 'odoo' ? 'price_stock_meta' : 'sync_all';
+            const jobResult = await query(
+              `INSERT INTO sync_jobs (client_id, channel_id, feed_id, status, preset, total_products)
+               VALUES ($1, $2, $3, 'pending', $4, 0)
+               RETURNING id`,
+              [automation.client_id, automation.channel_id, automation.feed_id, preset]
+            );
+            const jobId = jobResult.rows[0].id;
+            if (automation.amazon_credentials_json) {
+              runAmazonSyncJob({
+                jobId,
+                channel: {
+                  id: automation.channel_id,
+                  client_id: automation.client_id,
+                  amazon_credentials_json: automation.amazon_credentials_json,
+                  amazon_marketplace_ids: automation.amazon_marketplace_ids,
+                  amazon_region: automation.amazon_region,
+                  settings: automation.settings,
+                },
+                feedId: automation.feed_id,
+                preset,
+                priceAdjustmentPercent: Number(automation.price_adjustment_percent || 0),
+                priceRoundingMode: automation.rounding_mode === 'up' || automation.rounding_mode === 'down' ? automation.rounding_mode : 'none',
+              }).catch(err => {
+                console.error(`[Scheduler] Amazon sync job ${jobId} failed:`, err);
+              });
+            }
           }
           // Update last_run_at
           await query('UPDATE automations SET last_run_at = NOW() WHERE id = $1', [automation.id]);
@@ -109,7 +177,10 @@ export function startScheduler() {
   // Also poll feeds with sync_interval_minutes set every 60 seconds
   setInterval(runScheduledFeedImports, 60_000);
 
-  console.log('[Scheduler] Started — checking automations every 60s, Odoo cancellations every 5m');
+  // Amazon order polling — every 5 minutes for active Amazon channels
+  setInterval(pollAmazonOrders, 5 * 60_000);
+
+  console.log('[Scheduler] Started — checking automations every 60s, Odoo cancellations every 5m, Amazon orders every 5m');
 }
 
 export function stopScheduler() {
@@ -237,5 +308,29 @@ async function runScheduledFeedImports() {
     }
   } catch (err) {
     console.error('[Scheduler] runScheduledFeedImports error:', err);
+  }
+}
+
+// ── Amazon order polling ──────────────────────────────────────────────────
+
+async function pollAmazonOrders() {
+  try {
+    const result = await query(
+      "SELECT id FROM channels WHERE type = 'amazon' AND status = 'active' AND amazon_credentials_json IS NOT NULL"
+    );
+
+    if (result.rows.length === 0) return;
+
+    const { syncAmazonOrders } = await import('./amazonOrdersService.js');
+
+    for (const ch of result.rows) {
+      try {
+        await syncAmazonOrders(ch.id);
+      } catch (err) {
+        console.error(`[Scheduler] Amazon order poll failed for channel ${ch.id}:`, err);
+      }
+    }
+  } catch (err) {
+    console.error('[Scheduler] pollAmazonOrders error:', err);
   }
 }

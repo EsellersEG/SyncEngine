@@ -117,12 +117,60 @@ router.post('/auto-map', async (req, res) => {
       'image src': 'image_url', 'image_src': 'image_url', 'image url': 'image_url',
     };
 
+    // Noon-specific auto-map rules
+    const NOON_AUTO_MAP: Record<string, string> = {
+      'sku': 'partner_sku', 'partner_sku': 'partner_sku', 'variant_sku': 'partner_sku', 'variant sku': 'partner_sku',
+      'quantity': 'qty', 'stock': 'qty', 'inventory_quantity': 'qty', 'qty': 'qty',
+      'qty_available': 'qty', 'free_qty': 'qty', 'virtual_available': 'qty',
+      'price': 'price', 'variant_price': 'price', 'variant price': 'price', 'list_price': 'price',
+      'msrp': 'msrp', 'compare_at_price': 'msrp', 'compare at price': 'msrp', 'variant compare at price': 'msrp',
+      'sale_price': 'sale_price', 'sale price': 'sale_price',
+      'title': 'title', 'name': 'title',
+      'description': 'description', 'body_html': 'description', 'body html': 'description',
+      'brand': 'brand', 'vendor': 'brand',
+      'image src': 'image_1', 'image_src': 'image_1', 'image url': 'image_1', 'image_url': 'image_1',
+      'status': 'is_active', 'is_active': 'is_active', 'active': 'is_active',
+      'bullet_point_1': 'bullet_point_1', 'bullet point 1': 'bullet_point_1',
+      'bullet_point_2': 'bullet_point_2', 'bullet point 2': 'bullet_point_2',
+      'bullet_point_3': 'bullet_point_3', 'bullet point 3': 'bullet_point_3',
+      'bullet_point_4': 'bullet_point_4', 'bullet point 4': 'bullet_point_4',
+      'bullet_point_5': 'bullet_point_5', 'bullet point 5': 'bullet_point_5',
+      'search_keywords': 'search_keywords', 'search keywords': 'search_keywords', 'tags': 'search_keywords',
+    };
+
+    // Amazon-specific auto-map rules
+    const AMAZON_AUTO_MAP: Record<string, string> = {
+      'sku': 'sku', 'variant_sku': 'sku', 'variant sku': 'sku',
+      'title': 'item_name', 'name': 'item_name', 'item_name': 'item_name',
+      'description': 'product_description', 'body_html': 'product_description', 'body html': 'product_description', 'product_description': 'product_description',
+      'brand': 'brand', 'vendor': 'brand',
+      'price': 'price', 'variant_price': 'price', 'variant price': 'price', 'list_price': 'price',
+      'msrp': 'msrp', 'compare_at_price': 'msrp', 'compare at price': 'msrp', 'variant compare at price': 'msrp',
+      'sale_price': 'sale_price', 'sale price': 'sale_price',
+      'quantity': 'fulfillment_availability', 'stock': 'fulfillment_availability', 'inventory_quantity': 'fulfillment_availability',
+      'qty': 'fulfillment_availability', 'qty_available': 'fulfillment_availability', 'free_qty': 'fulfillment_availability',
+      'bullet_point_1': 'bullet_point_1', 'bullet point 1': 'bullet_point_1',
+      'bullet_point_2': 'bullet_point_2', 'bullet point 2': 'bullet_point_2',
+      'bullet_point_3': 'bullet_point_3', 'bullet point 3': 'bullet_point_3',
+      'bullet_point_4': 'bullet_point_4', 'bullet point 4': 'bullet_point_4',
+      'bullet_point_5': 'bullet_point_5', 'bullet point 5': 'bullet_point_5',
+      'image src': 'main_product_image', 'image_src': 'main_product_image', 'image url': 'main_product_image', 'image_url': 'main_product_image',
+      'image_2': 'other_product_image_1', 'image_3': 'other_product_image_2', 'image_4': 'other_product_image_3',
+      'image_5': 'other_product_image_4', 'image_6': 'other_product_image_5', 'image_7': 'other_product_image_6', 'image_8': 'other_product_image_7',
+      'tags': 'search_terms', 'search_terms': 'search_terms', 'search terms': 'search_terms', 'search_keywords': 'search_terms',
+    };
+
+    // Determine which auto-map to use based on channel type
+    const channelResult = await query('SELECT type FROM channels WHERE id = $1', [channel_id]);
+    const channelType = channelResult.rows[0]?.type;
+    const activeAutoMap = channelType === 'amazon' ? AMAZON_AUTO_MAP : channelType === 'noon' ? NOON_AUTO_MAP : AUTO_MAP;
+
     const mappings: Array<{ feed_column: string; target_field: string }> = [];
     const usedTargets = new Set<string>();
 
     for (const header of headers) {
       const key = header.toLowerCase().trim();
-      const target = AUTO_MAP[key];
+      const target = activeAutoMap[key];
       if (target && !usedTargets.has(target)) {
         mappings.push({ feed_column: header, target_field: target });
         usedTargets.add(target);

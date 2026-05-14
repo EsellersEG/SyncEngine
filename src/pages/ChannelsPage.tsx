@@ -7,13 +7,16 @@ interface Channel {
   id: string; client_id: string; name: string; type: string; status: string;
   shopify_store_url: string; shopify_api_version: string; total_syncs: string;
   last_synced_at: string | null; created_at: string; settings?: { stock_location_id?: string; webhook_secret?: string };
+  noon_warehouse_code?: string; noon_country_code?: string;
+  amazon_marketplace_ids?: string; amazon_region?: string;
 }
 interface Client { id: string; name: string; }
 interface Location { id: string; name: string; active: boolean; address: string; }
 
 const CHANNEL_TYPES = [
   { value: 'shopify', label: 'Shopify', badge: 'badge-success', color: '#4ade80' },
-  { value: 'amazon', label: 'Amazon', badge: 'badge-warning', color: '#fbbf24' },
+  { value: 'noon', label: 'Noon', badge: 'badge-warning', color: '#fbbf24' },
+  { value: 'amazon', label: 'Amazon', badge: 'badge-warning', color: '#ff9900' },
   { value: 'bol', label: 'Bol.com', badge: 'badge-info', color: '#60a5fa' },
   { value: 'kaufland', label: 'Kaufland', badge: 'badge-warning', color: '#fbbf24' },
   { value: 'cdiscount', label: 'Cdiscount', badge: 'badge-info', color: '#60a5fa' },
@@ -34,10 +37,12 @@ export default function ChannelsPage() {
   const [form, setForm] = useState({
     client_id: '', name: '', type: 'shopify',
     shopify_store_url: '', shopify_access_token: '', shopify_api_version: '2024-10', webhook_secret: '',
+    noon_credentials_json: '', noon_warehouse_code: '', noon_country_code: 'AE',
+    amazon_credentials_json: '', amazon_region: 'eu', amazon_marketplace_ids: '' as string,
   });
   const [error, setError] = useState('');
   const [editChannel, setEditChannel] = useState<Channel | null>(null);
-  const [editForm, setEditForm] = useState({ name: '', shopify_access_token: '', shopify_api_version: '2024-10', stock_location_id: '', webhook_secret: '' });
+  const [editForm, setEditForm] = useState({ name: '', shopify_access_token: '', shopify_api_version: '2024-10', stock_location_id: '', webhook_secret: '', noon_credentials_json: '', noon_warehouse_code: '', noon_country_code: 'AE', amazon_credentials_json: '', amazon_region: 'eu', amazon_marketplace_ids: '' });
   const [locations, setLocations] = useState<Location[]>([]);
   const [loadingLocations, setLoadingLocations] = useState(false);
 
@@ -58,6 +63,12 @@ export default function ChannelsPage() {
         shopify_store_url: form.shopify_store_url,
         shopify_access_token: form.shopify_access_token,
         shopify_api_version: form.shopify_api_version,
+        noon_credentials_json: form.noon_credentials_json || undefined,
+        noon_warehouse_code: form.noon_warehouse_code || undefined,
+        noon_country_code: form.noon_country_code || undefined,
+        amazon_credentials_json: form.amazon_credentials_json || undefined,
+        amazon_marketplace_ids: form.amazon_marketplace_ids || undefined,
+        amazon_region: form.amazon_region || undefined,
         settings: { webhook_secret: form.webhook_secret || null },
       };
       const newCh = await api.post('/channels', payload) as Channel;
@@ -71,8 +82,14 @@ export default function ChannelsPage() {
   async function handleTest(channelId: string) {
     setTesting(channelId);
     try {
-      const result = await api.post(`/channels/${channelId}/test`, {}) as { success: boolean; shop?: { name: string } };
-      alert(result.success ? `✅ Connected! Shop: ${result.shop?.name}` : 'Connection failed');
+      const result = await api.post(`/channels/${channelId}/test`, {}) as { success: boolean; shop?: { name: string }; seller?: { name: string; id: string }; marketplaces?: { id: string; country: string }[] };
+      if (result.seller) {
+        alert(`✅ Connected! Noon Seller: ${result.seller.name}`);
+      } else if (result.marketplaces) {
+        alert(`✅ Connected! Amazon Marketplaces: ${result.marketplaces.map(m => m.country).join(', ')}`);
+      } else {
+        alert(result.success ? `✅ Connected! Shop: ${result.shop?.name}` : 'Connection failed');
+      }
       setChannels(prev => prev.map(ch => ch.id === channelId ? { ...ch, status: result.success ? 'active' : 'error' } : ch));
     } catch (err: unknown) {
       alert(err instanceof Error ? err.message : 'Test failed');
@@ -95,6 +112,12 @@ export default function ChannelsPage() {
       shopify_api_version: ch.shopify_api_version || '2024-10',
       stock_location_id: ch.settings?.stock_location_id || '',
       webhook_secret: ch.settings?.webhook_secret || '',
+      noon_credentials_json: '',
+      noon_warehouse_code: ch.noon_warehouse_code || '',
+      noon_country_code: ch.noon_country_code || 'AE',
+      amazon_credentials_json: '',
+      amazon_region: ch.amazon_region || 'eu',
+      amazon_marketplace_ids: ch.amazon_marketplace_ids || '',
     });
     setError('');
     setLocations([]);
@@ -114,6 +137,12 @@ export default function ChannelsPage() {
     try {
       const body: Record<string, unknown> = { name: editForm.name, shopify_api_version: editForm.shopify_api_version };
       if (editForm.shopify_access_token) body.shopify_access_token = editForm.shopify_access_token;
+      if (editForm.noon_credentials_json) body.noon_credentials_json = editForm.noon_credentials_json;
+      if (editForm.noon_warehouse_code) body.noon_warehouse_code = editForm.noon_warehouse_code;
+      if (editForm.noon_country_code) body.noon_country_code = editForm.noon_country_code;
+      if (editForm.amazon_credentials_json) body.amazon_credentials_json = editForm.amazon_credentials_json;
+      if (editForm.amazon_marketplace_ids) body.amazon_marketplace_ids = editForm.amazon_marketplace_ids;
+      if (editForm.amazon_region) body.amazon_region = editForm.amazon_region;
       body.settings = { stock_location_id: editForm.stock_location_id || null, webhook_secret: editForm.webhook_secret || null };
       const updated = await api.patch(`/channels/${editChannel.id}`, body) as Channel;
       setChannels(prev => prev.map(ch => ch.id === updated.id ? { ...ch, ...updated } : ch));
@@ -134,6 +163,8 @@ export default function ChannelsPage() {
           setForm({
             client_id: '', name: '', type: 'shopify',
             shopify_store_url: '', shopify_access_token: '', shopify_api_version: '2024-10', webhook_secret: '',
+            noon_credentials_json: '', noon_warehouse_code: '', noon_country_code: 'AE',
+            amazon_credentials_json: '', amazon_region: 'eu', amazon_marketplace_ids: '',
           });
           setError('');
           setShowModal(true);
@@ -155,7 +186,9 @@ export default function ChannelsPage() {
             <button className="btn btn-primary" onClick={() => {
               setForm({
                 client_id: '', name: '', type: 'shopify',
-                shopify_store_url: '', shopify_access_token: '', shopify_api_version: '2024-10',
+                shopify_store_url: '', shopify_access_token: '', shopify_api_version: '2024-10', webhook_secret: '',
+                noon_credentials_json: '', noon_warehouse_code: '', noon_country_code: 'AE',
+                amazon_credentials_json: '', amazon_region: 'eu', amazon_marketplace_ids: '',
               });
               setError('');
               setShowModal(true);
@@ -176,7 +209,7 @@ export default function ChannelsPage() {
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
                         fontSize: 18
                       }}>
-                        {ch.type === 'shopify' ? '🛍️' : ch.type === 'amazon' ? '📦' : ch.type === 'bol' ? '🏪' : '🌐'}
+                        {ch.type === 'shopify' ? '🛍️' : ch.type === 'noon' ? '🌙' : ch.type === 'amazon' ? '📦' : ch.type === 'bol' ? '🏪' : '🌐'}
                       </div>
                       <div>
                         <div style={{ fontSize: 15, fontWeight: 700, color: '#e2e8f0' }}>{ch.name}</div>
@@ -195,7 +228,7 @@ export default function ChannelsPage() {
                   </div>
 
                   <div style={{ display: 'flex', gap: 8 }}>
-                    {ch.type === 'shopify' && (
+                    {(ch.type === 'shopify' || ch.type === 'noon' || ch.type === 'amazon') && (
                       <button
                         className="btn btn-secondary btn-sm"
                         onClick={() => handleTest(ch.id)}
@@ -206,7 +239,7 @@ export default function ChannelsPage() {
                         {testing === ch.id ? 'Testing...' : 'Test Connection'}
                       </button>
                     )}
-                    {ch.type !== 'shopify' && (
+                    {ch.type !== 'shopify' && ch.type !== 'noon' && ch.type !== 'amazon' && (
                       <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, color: '#475569', padding: '6px 12px', background: 'rgba(45,61,88,0.3)', borderRadius: 8, border: '1px solid rgba(79,110,247,0.1)' }}>
                         Coming in Phase 2
                       </div>
@@ -283,6 +316,57 @@ export default function ChannelsPage() {
                   </div>
                 </div>
               )}
+              {editChannel.type === 'noon' && (
+                <div style={{ border: '1px solid rgba(251,191,36,0.2)', borderRadius: 10, padding: 14, background: 'rgba(13,18,36,0.4)' }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#e2e8f0', marginBottom: 10 }}>Noon Settings</div>
+                  <div className="form-group" style={{ marginBottom: 10 }}>
+                    <label className="label">Credentials JSON (leave blank to keep current)</label>
+                    <textarea className="input" rows={3} placeholder="Paste new credentials to update..." value={editForm.noon_credentials_json}
+                      onChange={e => setEditForm(f => ({ ...f, noon_credentials_json: e.target.value }))} style={{ fontFamily: 'monospace', fontSize: 12 }} />
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                    <div className="form-group" style={{ marginBottom: 0 }}>
+                      <label className="label">Country</label>
+                      <select className="input" value={editForm.noon_country_code}
+                        onChange={e => setEditForm(f => ({ ...f, noon_country_code: e.target.value }))}>
+                        <option value="AE">UAE (AE)</option>
+                        <option value="EG">Egypt (EG)</option>
+                      </select>
+                    </div>
+                    <div className="form-group" style={{ marginBottom: 0 }}>
+                      <label className="label">Warehouse Code (FBN)</label>
+                      <input className="input" value={editForm.noon_warehouse_code}
+                        onChange={e => setEditForm(f => ({ ...f, noon_warehouse_code: e.target.value }))} />
+                    </div>
+                  </div>
+                </div>
+              )}
+              {editChannel.type === 'amazon' && (
+                <div style={{ border: '1px solid rgba(255,153,0,0.2)', borderRadius: 10, padding: 14, background: 'rgba(13,18,36,0.4)' }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#e2e8f0', marginBottom: 10 }}>Amazon Settings</div>
+                  <div className="form-group" style={{ marginBottom: 10 }}>
+                    <label className="label">Credentials JSON (leave blank to keep current)</label>
+                    <textarea className="input" rows={3} placeholder="Paste new credentials to update..." value={editForm.amazon_credentials_json}
+                      onChange={e => setEditForm(f => ({ ...f, amazon_credentials_json: e.target.value }))} style={{ fontFamily: 'monospace', fontSize: 12 }} />
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                    <div className="form-group" style={{ marginBottom: 0 }}>
+                      <label className="label">Region</label>
+                      <select className="input" value={editForm.amazon_region}
+                        onChange={e => setEditForm(f => ({ ...f, amazon_region: e.target.value }))}>
+                        <option value="na">North America (NA)</option>
+                        <option value="eu">Europe / MENA (EU)</option>
+                        <option value="fe">Far East (FE)</option>
+                      </select>
+                    </div>
+                    <div className="form-group" style={{ marginBottom: 0 }}>
+                      <label className="label">Marketplace IDs</label>
+                      <input className="input" value={editForm.amazon_marketplace_ids}
+                        onChange={e => setEditForm(f => ({ ...f, amazon_marketplace_ids: e.target.value }))} />
+                    </div>
+                  </div>
+                </div>
+              )}
               {error && <div style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: '#f87171' }}>{error}</div>}
               <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
                 <button type="button" className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setEditChannel(null)}>Cancel</button>
@@ -344,7 +428,65 @@ export default function ChannelsPage() {
                   </div>
                 </>
               )}
-              {form.type !== 'shopify' && (
+              {form.type === 'noon' && (
+                <>
+                  <div className="form-group">
+                    <label className="label">Credentials JSON</label>
+                    <textarea className="input" rows={4} placeholder={'{\n  "accessKey": "...",\n  "secretKey": "...",\n  "sellerId": "..."\n}'} value={form.noon_credentials_json}
+                      onChange={e => setForm(f => ({ ...f, noon_credentials_json: e.target.value }))} style={{ fontFamily: 'monospace', fontSize: 12 }} />
+                    <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>Paste your Noon Seller Lab API credentials as JSON</div>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                    <div className="form-group">
+                      <label className="label">Country</label>
+                      <select className="input" value={form.noon_country_code}
+                        onChange={e => setForm(f => ({ ...f, noon_country_code: e.target.value }))}>
+                        <option value="AE">UAE (AE)</option>
+                        <option value="EG">Egypt (EG)</option>
+                      </select>
+                    </div>
+                    <div className="form-group">
+                      <label className="label">Warehouse Code (FBN)</label>
+                      <input className="input" placeholder="e.g. NOON-FBN-AE" value={form.noon_warehouse_code}
+                        onChange={e => setForm(f => ({ ...f, noon_warehouse_code: e.target.value }))} />
+                    </div>
+                  </div>
+                  <div style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)', borderRadius: 8, padding: '12px 14px', fontSize: 13, color: '#60a5fa' }}>
+                    🌙 Noon FBN integration supports stock sync, price sync, and CSV content pipeline for AE and EG markets.
+                  </div>
+                </>
+              )}
+              {form.type === 'amazon' && (
+                <>
+                  <div className="form-group">
+                    <label className="label">Credentials JSON</label>
+                    <textarea className="input" rows={5} placeholder={'{\n  "client_id": "amzn1.application-oa2-client...",\n  "client_secret": "...",\n  "refresh_token": "Atzr|...",\n  "seller_id": "A1B2C3D4E5..."\n}'} value={form.amazon_credentials_json}
+                      onChange={e => setForm(f => ({ ...f, amazon_credentials_json: e.target.value }))} style={{ fontFamily: 'monospace', fontSize: 12 }} />
+                    <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>Paste your Amazon SP-API credentials as JSON</div>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                    <div className="form-group">
+                      <label className="label">Region</label>
+                      <select className="input" value={form.amazon_region}
+                        onChange={e => setForm(f => ({ ...f, amazon_region: e.target.value, amazon_marketplace_ids: '' }))}>
+                        <option value="na">North America (NA)</option>
+                        <option value="eu">Europe / MENA (EU)</option>
+                        <option value="fe">Far East (FE)</option>
+                      </select>
+                    </div>
+                    <div className="form-group">
+                      <label className="label">Marketplace IDs</label>
+                      <input className="input" placeholder="e.g. A2VIGQ35RCS4UG,ARBP9OOSHTCHU" value={form.amazon_marketplace_ids}
+                        onChange={e => setForm(f => ({ ...f, amazon_marketplace_ids: e.target.value }))} />
+                      <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>Comma-separated marketplace IDs</div>
+                    </div>
+                  </div>
+                  <div style={{ background: 'rgba(255,153,0,0.08)', border: '1px solid rgba(255,153,0,0.2)', borderRadius: 8, padding: '12px 14px', fontSize: 13, color: '#ff9900' }}>
+                    📦 Amazon SP-API integration supports stock, price, content sync via Feeds API and order polling for AE, EG, US, UK, DE.
+                  </div>
+                </>
+              )}
+              {form.type !== 'shopify' && form.type !== 'noon' && form.type !== 'amazon' && (
                 <div style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 8, padding: '12px 14px', fontSize: 13, color: '#fbbf24' }}>
                   ⚠️ {CHANNEL_TYPES.find(t => t.value === form.type)?.label} integration is planned for Phase 2. You can create the channel now and connect it later.
                 </div>

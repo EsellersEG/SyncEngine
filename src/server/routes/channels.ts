@@ -24,6 +24,8 @@ router.get('/', async (req: AuthRequest, res) => {
     const masked = result.rows.map(ch => ({
       ...ch,
       shopify_access_token: ch.shopify_access_token ? '••••••••' : null,
+      noon_credentials_json: ch.noon_credentials_json ? '••••••••' : null,
+      amazon_credentials_json: ch.amazon_credentials_json ? '••••••••' : null,
     }));
     return res.json(masked);
   } catch (err) {
@@ -38,7 +40,12 @@ router.get('/:id', async (req, res) => {
     const result = await query('SELECT * FROM channels WHERE id = $1', [req.params.id]);
     if (!result.rows[0]) return res.status(404).json({ error: 'Channel not found' });
     const ch = result.rows[0];
-    return res.json({ ...ch, shopify_access_token: ch.shopify_access_token ? '••••••••' : null });
+    return res.json({
+      ...ch,
+      shopify_access_token: ch.shopify_access_token ? '••••••••' : null,
+      noon_credentials_json: ch.noon_credentials_json ? '••••••••' : null,
+      amazon_credentials_json: ch.amazon_credentials_json ? '••••••••' : null,
+    });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Failed to fetch channel' });
@@ -51,6 +58,8 @@ router.post('/', async (req, res) => {
     const {
       client_id, name, type,
       shopify_store_url, shopify_access_token, shopify_api_version,
+      noon_credentials_json, noon_warehouse_code, noon_country_code,
+      amazon_credentials_json, amazon_marketplace_ids, amazon_region,
       settings = {}
     } = req.body;
 
@@ -58,12 +67,23 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'client_id, name, type required' });
     }
 
+    if (type === 'noon' && !noon_credentials_json) {
+      return res.status(400).json({ error: 'noon_credentials_json required for Noon channels' });
+    }
+
+    if (type === 'amazon' && !amazon_credentials_json) {
+      return res.status(400).json({ error: 'amazon_credentials_json required for Amazon channels' });
+    }
+
     const result = await query(
-      `INSERT INTO channels (client_id, name, type, shopify_store_url, shopify_access_token, shopify_api_version, settings)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING id, client_id, name, type, status, shopify_store_url, shopify_api_version, settings, created_at`,
+      `INSERT INTO channels (client_id, name, type, shopify_store_url, shopify_access_token, shopify_api_version, noon_credentials_json, noon_warehouse_code, noon_country_code, amazon_credentials_json, amazon_marketplace_ids, amazon_region, settings)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+       RETURNING id, client_id, name, type, status, shopify_store_url, shopify_api_version, noon_warehouse_code, noon_country_code, amazon_marketplace_ids, amazon_region, settings, created_at`,
       [client_id, name, type, shopify_store_url || null, shopify_access_token || null,
-       shopify_api_version || '2024-10', JSON.stringify(settings)]
+       shopify_api_version || '2024-10', noon_credentials_json || null,
+       noon_warehouse_code || null, noon_country_code || null,
+       amazon_credentials_json || null, amazon_marketplace_ids || null, amazon_region || null,
+       JSON.stringify(settings)]
     );
     return res.status(201).json(result.rows[0]);
   } catch (err) {
@@ -75,7 +95,7 @@ router.post('/', async (req, res) => {
 // PATCH /api/channels/:id
 router.patch('/:id', async (req, res) => {
   try {
-    const { name, status, shopify_access_token, shopify_api_version, settings } = req.body;
+    const { name, status, shopify_access_token, shopify_api_version, noon_credentials_json, noon_warehouse_code, noon_country_code, amazon_credentials_json, amazon_marketplace_ids, amazon_region, settings } = req.body;
     const result = await query(
       `UPDATE channels SET
         name = COALESCE($1, name),
@@ -83,11 +103,20 @@ router.patch('/:id', async (req, res) => {
         shopify_access_token = COALESCE($3, shopify_access_token),
         shopify_api_version = COALESCE($4, shopify_api_version),
         settings = COALESCE($5::jsonb, settings),
+        noon_credentials_json = COALESCE(NULLIF($6, ''), noon_credentials_json),
+        noon_warehouse_code = COALESCE($7, noon_warehouse_code),
+        noon_country_code = COALESCE($8, noon_country_code),
+        amazon_credentials_json = COALESCE(NULLIF($9, ''), amazon_credentials_json),
+        amazon_marketplace_ids = COALESCE($10, amazon_marketplace_ids),
+        amazon_region = COALESCE($11, amazon_region),
         updated_at = NOW()
-       WHERE id = $6
-       RETURNING id, client_id, name, type, status, shopify_store_url, shopify_api_version, settings`,
+       WHERE id = $12
+       RETURNING id, client_id, name, type, status, shopify_store_url, shopify_api_version, noon_warehouse_code, noon_country_code, amazon_marketplace_ids, amazon_region, settings`,
       [name, status, shopify_access_token, shopify_api_version,
-       settings ? JSON.stringify(settings) : null, req.params.id]
+       settings ? JSON.stringify(settings) : null,
+       noon_credentials_json || null, noon_warehouse_code || null, noon_country_code || null,
+       amazon_credentials_json || null, amazon_marketplace_ids || null, amazon_region || null,
+       req.params.id]
     );
     if (!result.rows[0]) return res.status(404).json({ error: 'Channel not found' });
     return res.json(result.rows[0]);
@@ -108,16 +137,49 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-// POST /api/channels/:id/test — test Shopify connection
+// POST /api/channels/:id/test — test channel connection (Shopify or Noon)
 router.post('/:id/test', async (req, res) => {
   try {
     const result = await query(
-      'SELECT shopify_store_url, shopify_access_token, shopify_api_version FROM channels WHERE id = $1',
+      'SELECT * FROM channels WHERE id = $1',
       [req.params.id]
     );
     const ch = result.rows[0];
     if (!ch) return res.status(404).json({ error: 'Channel not found' });
 
+    // Noon test
+    if (ch.type === 'noon') {
+      if (!ch.noon_credentials_json) {
+        return res.status(400).json({ error: 'Noon credentials not configured' });
+      }
+      const { testNoonConnection } = await import('../services/noonAuthService.js');
+      const noonResult = await testNoonConnection(ch.noon_credentials_json, ch.noon_country_code || 'AE');
+      if (noonResult.success) {
+        await query("UPDATE channels SET status = 'active' WHERE id = $1", [req.params.id]);
+        return res.json({ success: true, seller: noonResult.seller });
+      } else {
+        await query("UPDATE channels SET status = 'error' WHERE id = $1", [req.params.id]);
+        return res.status(400).json({ error: noonResult.error || 'Noon connection failed' });
+      }
+    }
+
+    // Amazon test
+    if (ch.type === 'amazon') {
+      if (!ch.amazon_credentials_json) {
+        return res.status(400).json({ error: 'Amazon credentials not configured' });
+      }
+      const { testAmazonConnection } = await import('../services/amazonAuthService.js');
+      const amazonResult = await testAmazonConnection(ch.amazon_credentials_json, ch.amazon_region || 'eu');
+      if (amazonResult.success) {
+        await query("UPDATE channels SET status = 'active' WHERE id = $1", [req.params.id]);
+        return res.json({ success: true, marketplaces: amazonResult.marketplaces });
+      } else {
+        await query("UPDATE channels SET status = 'error' WHERE id = $1", [req.params.id]);
+        return res.status(400).json({ error: amazonResult.error || 'Amazon connection failed' });
+      }
+    }
+
+    // Shopify test (default)
     const url = `https://${ch.shopify_store_url}/admin/api/${ch.shopify_api_version}/shop.json`;
     const shopRes = await fetch(url, {
       headers: { 'X-Shopify-Access-Token': ch.shopify_access_token },

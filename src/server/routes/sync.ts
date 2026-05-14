@@ -2,6 +2,8 @@ import { Router } from 'express';
 import { query } from '../db.js';
 import { authenticate, type AuthRequest } from '../middleware/auth.js';
 import { runSyncJob, cancelJob } from '../services/shopifySyncService.js';
+import { runNoonSyncJob, cancelNoonJob } from '../services/noonSyncService.js';
+import { runAmazonSyncJob, cancelAmazonJob } from '../services/amazonSyncService.js';
 
 const router = Router();
 router.use(authenticate);
@@ -9,7 +11,7 @@ router.use(authenticate);
 // POST /api/sync/start — kick off a sync job
 router.post('/start', async (req: AuthRequest, res) => {
   try {
-    const { channel_id, feed_id, preset = 'sync_all', fields, filter_rules } = req.body;
+    const { channel_id, feed_id, preset = 'sync_all', fields, filter_rules, include_images } = req.body;
     if (!channel_id || !feed_id) {
       return res.status(400).json({ error: 'channel_id and feed_id required' });
     }
@@ -21,8 +23,8 @@ router.post('/start', async (req: AuthRequest, res) => {
     );
     const channel = channelResult.rows[0];
     if (!channel) return res.status(404).json({ error: 'Channel not found' });
-    if (channel.type !== 'shopify') {
-      return res.status(400).json({ error: 'Only Shopify channels supported in Phase 1' });
+    if (channel.type !== 'shopify' && channel.type !== 'noon' && channel.type !== 'amazon') {
+      return res.status(400).json({ error: 'Only Shopify, Noon, and Amazon channels are supported' });
     }
 
     const feedResult = await query(
@@ -95,20 +97,61 @@ router.post('/start', async (req: AuthRequest, res) => {
 
     res.json({ jobId, status: 'pending', message: 'Sync job started' });
 
-    // Run async (don't await)
-    runSyncJob({
-      jobId,
-      channel,
-      feedId: feed_id,
-      preset: effectivePreset,
-      fields,
-      filterRules: filter_rules,
-      priceAdjustmentPercent,
-      priceRoundingMode,
-      warehouseName: resolvedWarehouseName,
-    }).catch(err => {
-      console.error(`[SyncRoute] Job ${jobId} crashed:`, err);
-    });
+    // Run async (don't await) — dispatch to appropriate sync engine
+    if (channel.type === 'noon') {
+      runNoonSyncJob({
+        jobId,
+        channel: {
+          id: channel.id,
+          client_id: channel.client_id,
+          noon_credentials_json: channel.noon_credentials_json,
+          noon_warehouse_code: channel.noon_warehouse_code,
+          noon_country_code: channel.noon_country_code,
+          settings: channel.settings,
+        },
+        feedId: feed_id,
+        preset: effectivePreset,
+        fields,
+        priceAdjustmentPercent,
+        priceRoundingMode,
+      }).catch(err => {
+        console.error(`[SyncRoute] Noon job ${jobId} crashed:`, err);
+      });
+    } else if (channel.type === 'amazon') {
+      runAmazonSyncJob({
+        jobId,
+        channel: {
+          id: channel.id,
+          client_id: channel.client_id,
+          amazon_credentials_json: channel.amazon_credentials_json,
+          amazon_marketplace_ids: channel.amazon_marketplace_ids,
+          amazon_region: channel.amazon_region,
+          settings: channel.settings,
+        },
+        feedId: feed_id,
+        preset: effectivePreset,
+        fields,
+        includeImages: !!include_images,
+        priceAdjustmentPercent,
+        priceRoundingMode,
+      }).catch(err => {
+        console.error(`[SyncRoute] Amazon job ${jobId} crashed:`, err);
+      });
+    } else {
+      runSyncJob({
+        jobId,
+        channel,
+        feedId: feed_id,
+        preset: effectivePreset,
+        fields,
+        filterRules: filter_rules,
+        priceAdjustmentPercent,
+        priceRoundingMode,
+        warehouseName: resolvedWarehouseName,
+      }).catch(err => {
+        console.error(`[SyncRoute] Job ${jobId} crashed:`, err);
+      });
+    }
 
     return;
   } catch (err) {
@@ -188,6 +231,8 @@ router.post('/jobs/:id/cancel', async (req, res) => {
     if (!result.rows[0]) return res.status(404).json({ error: 'Job not found or not cancellable' });
     // Signal the in-memory running loop to stop
     cancelJob(req.params.id);
+    cancelNoonJob(req.params.id);
+    cancelAmazonJob(req.params.id);
     return res.json({ success: true });
   } catch (err) {
     console.error(err);
