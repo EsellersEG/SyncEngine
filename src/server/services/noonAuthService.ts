@@ -38,13 +38,41 @@ const RETRY_DELAY_MS = 2000;
  */
 export function parseNoonCredentials(json: string): NoonCredentials {
   const parsed = JSON.parse(json);
-  if (!parsed.accessKey || !parsed.secretKey || !parsed.sellerId) {
-    throw new Error('Noon credentials must include accessKey, secretKey, and sellerId');
+
+  // Support multiple Noon credential formats:
+  // Format 1 (our internal): { accessKey, secretKey, sellerId }
+  // Format 2 (Noon Seller Lab download): { IAM_KEY_ID, IAM_SECRET }
+  const accessKey = parsed.accessKey || parsed.IAM_KEY_ID || parsed.key_id || '';
+  const secretKey = parsed.secretKey || parsed.IAM_SECRET || parsed.secret || '';
+  let sellerId = parsed.sellerId || parsed.seller_id || parsed.SELLER_ID || '';
+
+  if (!accessKey || !secretKey) {
+    throw new Error(
+      'Noon credentials JSON must include accessKey+secretKey, or IAM_KEY_ID+IAM_SECRET. ' +
+      'Download the JSON from Noon Seller Lab > Settings > API Credentials.'
+    );
   }
+
+  // Auto-extract sellerId from username field if present
+  if (!sellerId) {
+    const username = parsed.username || parsed.USERNAME || '';
+    if (username) {
+      const match = username.match(/@(p\d+)\./);
+      if (match) sellerId = match[1];
+    }
+  }
+
+  if (!sellerId) {
+    throw new Error(
+      'Could not determine sellerId. Add "sellerId": "pXXXXXX" to your credentials JSON, ' +
+      'or include the "username" field from Noon Seller Lab.'
+    );
+  }
+
   return {
-    accessKey: parsed.accessKey,
-    secretKey: parsed.secretKey,
-    sellerId: parsed.sellerId,
+    accessKey,
+    secretKey,
+    sellerId,
     environment: parsed.environment || 'production',
   };
 }
