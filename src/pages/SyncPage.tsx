@@ -60,7 +60,7 @@ const OPERATORS = [
 type View = 'main' | 'history' | 'validation' | 'filter-rules';
 
 export default function SyncPage() {
-  const { user } = useAuth();
+  const { user, isClient } = useAuth();
   const [channels, setChannels] = useState<Channel[]>([]);
   const [feeds, setFeeds] = useState<Feed[]>([]);
   const [jobs, setJobs] = useState<SyncJob[]>([]);
@@ -587,8 +587,9 @@ export default function SyncPage() {
         </div>
       </div>
 
-      <div className="page-body" style={{ display: 'grid', gridTemplateColumns: '380px 1fr', gap: 24, alignItems: 'flex-start' }}>
-        {/* Start Sync Panel */}
+      <div className="page-body" style={{ display: 'grid', gridTemplateColumns: isClient ? '1fr' : '380px 1fr', gap: 24, alignItems: 'flex-start' }}>
+        {/* Start Sync Panel — hidden for clients */}
+        {!isClient && (
         <div className="glass-card" style={{ padding: 24 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 24 }}>
             <div style={{ width: 36, height: 36, borderRadius: 10, background: 'linear-gradient(135deg, #4f6ef7, #7c3aed)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -728,6 +729,7 @@ export default function SyncPage() {
             </button>
           </form>
         </div>
+        )}
 
         {/* Active/Recent Jobs */}
         <div>
@@ -764,7 +766,7 @@ export default function SyncPage() {
                         job.status === 'failed' ? 'badge-danger' :
                         job.status === 'running' ? 'badge-info' : 'badge-muted'
                       }`}>{job.status}</span>
-                      {(job.status === 'running' || job.status === 'pending') && (
+                      {!isClient && (job.status === 'running' || job.status === 'pending') && (
                         <button className="btn btn-danger btn-sm" style={{ padding: '4px 8px' }} onClick={() => handleCancel(job.id)}>
                           <XCircle size={11} />
                         </button>

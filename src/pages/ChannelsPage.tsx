@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import Modal from '../components/Modal';
 import { Plus, GitBranch, Trash2, CheckCircle, XCircle, Loader, Pencil } from 'lucide-react';
+import { useAuth } from '../hooks/useAuth';
 
 interface Channel {
   id: string; client_id: string; name: string; type: string; status: string;
@@ -29,6 +30,7 @@ function StatusIcon({ status }: { status: string }) {
 }
 
 export default function ChannelsPage() {
+  const { isClient } = useAuth();
   const [channels, setChannels] = useState<Channel[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
@@ -159,18 +161,20 @@ export default function ChannelsPage() {
           <h1 className="page-title">Channels</h1>
           <p className="page-subtitle">Manage Shopify stores and marketplace connections</p>
         </div>
-        <button className="btn btn-primary" onClick={() => {
-          setForm({
-            client_id: '', name: '', type: 'shopify',
-            shopify_store_url: '', shopify_access_token: '', shopify_api_version: '2024-10', webhook_secret: '',
-            noon_credentials_json: '', noon_warehouse_code: '', noon_country_code: 'AE',
-            amazon_credentials_json: '', amazon_region: 'eu', amazon_marketplace_ids: '',
-          });
-          setError('');
-          setShowModal(true);
-        }}>
-          <Plus size={15} /> Add Channel
-        </button>
+        {!isClient && (
+          <button className="btn btn-primary" onClick={() => {
+            setForm({
+              client_id: '', name: '', type: 'shopify',
+              shopify_store_url: '', shopify_access_token: '', shopify_api_version: '2024-10', webhook_secret: '',
+              noon_credentials_json: '', noon_warehouse_code: '', noon_country_code: 'AE',
+              amazon_credentials_json: '', amazon_region: 'eu', amazon_marketplace_ids: '',
+            });
+            setError('');
+            setShowModal(true);
+          }}>
+            <Plus size={15} /> Add Channel
+          </button>
+        )}
       </div>
 
       <div className="page-body">
@@ -183,16 +187,18 @@ export default function ChannelsPage() {
             <GitBranch size={40} color="#334155" style={{ margin: '0 auto 16px' }} />
             <p style={{ color: '#475569', fontSize: 16, fontWeight: 600, marginBottom: 8 }}>No channels yet</p>
             <p style={{ color: '#334155', fontSize: 14, marginBottom: 24 }}>Connect a Shopify store or marketplace</p>
-            <button className="btn btn-primary" onClick={() => {
-              setForm({
-                client_id: '', name: '', type: 'shopify',
-                shopify_store_url: '', shopify_access_token: '', shopify_api_version: '2024-10', webhook_secret: '',
-                noon_credentials_json: '', noon_warehouse_code: '', noon_country_code: 'AE',
-                amazon_credentials_json: '', amazon_region: 'eu', amazon_marketplace_ids: '',
-              });
-              setError('');
-              setShowModal(true);
-            }}><Plus size={15} /> Add Channel</button>
+            {!isClient && (
+              <button className="btn btn-primary" onClick={() => {
+                setForm({
+                  client_id: '', name: '', type: 'shopify',
+                  shopify_store_url: '', shopify_access_token: '', shopify_api_version: '2024-10', webhook_secret: '',
+                  noon_credentials_json: '', noon_warehouse_code: '', noon_country_code: 'AE',
+                  amazon_credentials_json: '', amazon_region: 'eu', amazon_marketplace_ids: '',
+                });
+                setError('');
+                setShowModal(true);
+              }}><Plus size={15} /> Add Channel</button>
+            )}
           </div>
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 20 }}>
@@ -227,6 +233,7 @@ export default function ChannelsPage() {
                     {ch.last_synced_at && <span>Last: {new Date(ch.last_synced_at).toLocaleDateString()}</span>}
                   </div>
 
+                  {!isClient && (
                   <div style={{ display: 'flex', gap: 8 }}>
                     {(ch.type === 'shopify' || ch.type === 'noon' || ch.type === 'amazon') && (
                       <button
@@ -251,6 +258,7 @@ export default function ChannelsPage() {
                       <Trash2 size={12} />
                     </button>
                   </div>
+                  )}
                 </div>
               );
             })}

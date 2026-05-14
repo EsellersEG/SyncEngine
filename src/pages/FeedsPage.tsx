@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import Modal from '../components/Modal';
 import { Plus, Database, RefreshCw, Trash2, AlertCircle, Pencil, CheckCircle, Loader2 } from 'lucide-react';
+import { useAuth } from '../hooks/useAuth';
 
 interface Feed {
   id: string; client_id: string; name: string; type: string; spreadsheet_id: string;
@@ -18,6 +19,7 @@ interface Feed {
 interface Client { id: string; name: string; }
 
 export default function FeedsPage() {
+  const { isClient } = useAuth();
   const [params] = useSearchParams();
   const clientId = params.get('client_id');
 
@@ -189,9 +191,11 @@ export default function FeedsPage() {
           <h1 className="page-title">Feeds</h1>
           <p className="page-subtitle">Connect Google Sheets or Odoo as product sources</p>
         </div>
-        <button className="btn btn-primary" onClick={openCreateModal}>
-          <Plus size={15} /> Add Feed
-        </button>
+        {!isClient && (
+          <button className="btn btn-primary" onClick={openCreateModal}>
+            <Plus size={15} /> Add Feed
+          </button>
+        )}
       </div>
 
       <div className="page-body">
@@ -204,9 +208,11 @@ export default function FeedsPage() {
             <Database size={40} color="#334155" style={{ margin: '0 auto 16px' }} />
             <p style={{ color: '#475569', fontSize: 16, fontWeight: 600, marginBottom: 8 }}>No feeds connected</p>
             <p style={{ color: '#334155', fontSize: 14, marginBottom: 24 }}>Add a Google Sheet or Odoo connection to start importing products</p>
-            <button className="btn btn-primary" onClick={openCreateModal}>
-              <Plus size={15} /> Add First Feed
-            </button>
+            {!isClient && (
+              <button className="btn btn-primary" onClick={openCreateModal}>
+                <Plus size={15} /> Add First Feed
+              </button>
+            )}
           </div>
         ) : (
           <div className="table-container">
@@ -218,7 +224,7 @@ export default function FeedsPage() {
                   <th>Products</th>
                   <th>Last Sync</th>
                   <th>Auto-Sync</th>
-                  <th>Actions</th>
+                  {!isClient && <th>Actions</th>}
                 </tr>
               </thead>
               <tbody>
@@ -249,7 +255,7 @@ export default function FeedsPage() {
                           : `Every ${feed.sync_interval_minutes}m`
                         : 'Manual'}
                     </td>
-                    <td>
+                    {!isClient && <td>
                       <div style={{ display: 'flex', gap: 6 }}>
                         <button
                           className="btn btn-secondary btn-sm"
@@ -306,7 +312,7 @@ export default function FeedsPage() {
                       {importError[feed.id] && importing !== feed.id && (
                         <div style={{ marginTop: 6, fontSize: 12, color: '#f87171', wordBreak: 'break-word' }}>✗ {importError[feed.id]}</div>
                       )}
-                    </td>
+                    </td>}
                   </tr>
                 ))}
               </tbody>

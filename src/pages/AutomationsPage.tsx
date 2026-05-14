@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import Modal from '../components/Modal';
 import { Plus, Trash2, Activity, Play, Pause, Pencil } from 'lucide-react';
+import { useAuth } from '../hooks/useAuth';
 
 interface Automation {
   id: string;
@@ -27,6 +28,7 @@ interface Channel { id: string; name: string; client_id: string; }
 interface Client { id: string; name: string; }
 
 export default function AutomationsPage() {
+  const { isClient } = useAuth();
   const [automations, setAutomations] = useState<Automation[]>([]);
   const [feeds, setFeeds] = useState<Feed[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -170,9 +172,11 @@ export default function AutomationsPage() {
           <h1 className="page-title">Automations</h1>
           <p className="page-subtitle">Configure automatic imports and sync schedules</p>
         </div>
-        <button className="btn btn-primary" onClick={openCreateModal}>
-          <Plus size={15} /> Add Automation
-        </button>
+        {!isClient && (
+          <button className="btn btn-primary" onClick={openCreateModal}>
+            <Plus size={15} /> Add Automation
+          </button>
+        )}
       </div>
 
       <div className="page-body">
@@ -185,9 +189,11 @@ export default function AutomationsPage() {
             <Activity size={40} color="#334155" style={{ margin: '0 auto 16px' }} />
             <p style={{ color: '#475569', fontSize: 16, fontWeight: 600, marginBottom: 8 }}>No automations configured</p>
             <p style={{ color: '#334155', fontSize: 14, marginBottom: 24 }}>Create rules to automatically import products and sync to Shopify</p>
-            <button className="btn btn-primary" onClick={openCreateModal}>
-              <Plus size={15} /> Add First Automation
-            </button>
+            {!isClient && (
+              <button className="btn btn-primary" onClick={openCreateModal}>
+                <Plus size={15} /> Add First Automation
+              </button>
+            )}
           </div>
         ) : (
           <div className="table-container">
@@ -223,6 +229,7 @@ export default function AutomationsPage() {
                       </span>
                     </td>
                     <td>
+                      {!isClient && (
                       <div style={{ display: 'flex', gap: 6 }}>
                         <button className="btn btn-secondary btn-sm btn-icon" onClick={() => openEditModal(a)} title="Edit">
                           <Pencil size={12} />
@@ -234,6 +241,7 @@ export default function AutomationsPage() {
                           <Trash2 size={12} />
                         </button>
                       </div>
+                      )}
                     </td>
                   </tr>
                 ))}

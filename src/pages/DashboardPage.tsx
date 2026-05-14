@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import { Users, Database, GitBranch, Package, Zap, TrendingUp, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { useAuth } from '../hooks/useAuth';
 
 interface Stats {
   clients: number;
@@ -53,6 +54,7 @@ function StatCard({ icon: Icon, label, value, sub, color }: {
 }
 
 export default function DashboardPage() {
+  const { isClient } = useAuth();
   const [stats, setStats] = useState<Stats | null>(null);
   const [recentJobs, setRecentJobs] = useState<RecentJob[]>([]);
   const [loading, setLoading] = useState(true);
@@ -90,9 +92,11 @@ export default function DashboardPage() {
           <h1 className="page-title">Dashboard</h1>
           <p className="page-subtitle">Overview of your entire sync platform</p>
         </div>
-        <button className="btn btn-primary" onClick={() => navigate('/sync')}>
-          <Zap size={15} /> New Sync Job
-        </button>
+        {!isClient && (
+          <button className="btn btn-primary" onClick={() => navigate('/sync')}>
+            <Zap size={15} /> New Sync Job
+          </button>
+        )}
       </div>
 
       <div className="page-body">
@@ -120,9 +124,11 @@ export default function DashboardPage() {
               <Zap size={32} color="#334155" style={{ margin: '0 auto 12px' }} />
               <p style={{ color: '#475569', fontSize: 14 }}>No sync jobs yet</p>
               <p style={{ color: '#334155', fontSize: 13, marginTop: 4 }}>Connect a feed and channel to get started</p>
-              <button className="btn btn-primary btn-sm" style={{ marginTop: 16 }} onClick={() => navigate('/sync')}>
-                Start First Sync
-              </button>
+              {!isClient && (
+                <button className="btn btn-primary btn-sm" style={{ marginTop: 16 }} onClick={() => navigate('/sync')}>
+                  Start First Sync
+                </button>
+              )}
             </div>
           ) : (
             <div className="table-container" style={{ border: 'none', borderRadius: 0 }}>
@@ -167,22 +173,24 @@ export default function DashboardPage() {
           )}
         </div>
 
-        {/* Quick actions */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginTop: 24 }}>
-          {[
-            { title: 'Add a Feed', desc: 'Connect a Google Sheet as a product source', icon: Database, href: '/feeds', color: '#a78bfa' },
-            { title: 'Add a Channel', desc: 'Connect Shopify store or marketplace', icon: GitBranch, href: '/channels', color: '#22d3ee' },
-            { title: 'Configure Mapping', desc: 'Map feed columns to channel fields', icon: CheckCircle2, href: '/mapping', color: '#4ade80' },
-          ].map(action => (
-            <div key={action.href} className="glass-card glass-card-hover" style={{ padding: 20, cursor: 'pointer' }} onClick={() => navigate(action.href)}>
-              <div style={{ width: 40, height: 40, borderRadius: 10, background: `${action.color}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 12 }}>
-                <action.icon size={18} color={action.color} />
+        {/* Quick actions — hidden for clients */}
+        {!isClient && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginTop: 24 }}>
+            {[
+              { title: 'Add a Feed', desc: 'Connect a Google Sheet as a product source', icon: Database, href: '/feeds', color: '#a78bfa' },
+              { title: 'Add a Channel', desc: 'Connect Shopify store or marketplace', icon: GitBranch, href: '/channels', color: '#22d3ee' },
+              { title: 'Configure Mapping', desc: 'Map feed columns to channel fields', icon: CheckCircle2, href: '/mapping', color: '#4ade80' },
+            ].map(action => (
+              <div key={action.href} className="glass-card glass-card-hover" style={{ padding: 20, cursor: 'pointer' }} onClick={() => navigate(action.href)}>
+                <div style={{ width: 40, height: 40, borderRadius: 10, background: `${action.color}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 12 }}>
+                  <action.icon size={18} color={action.color} />
+                </div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: '#e2e8f0', marginBottom: 4 }}>{action.title}</div>
+                <div style={{ fontSize: 13, color: '#64748b' }}>{action.desc}</div>
               </div>
-              <div style={{ fontSize: 14, fontWeight: 600, color: '#e2e8f0', marginBottom: 4 }}>{action.title}</div>
-              <div style={{ fontSize: 13, color: '#64748b' }}>{action.desc}</div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

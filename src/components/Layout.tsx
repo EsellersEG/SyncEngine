@@ -6,15 +6,15 @@ import {
 } from 'lucide-react';
 
 const navItems = [
-  { to: '/', icon: LayoutDashboard, label: 'Dashboard', end: true, roles: ['admin', 'employee'] },
+  { to: '/', icon: LayoutDashboard, label: 'Dashboard', end: true, roles: ['admin', 'employee', 'client'] },
   { to: '/clients', icon: Users, label: 'Clients', roles: ['admin', 'employee'] },
-  { to: '/feeds', icon: Database, label: 'Feeds', roles: ['admin', 'employee'] },
-  { to: '/channels', icon: GitBranch, label: 'Channels', roles: ['admin', 'employee'] },
-  { to: '/products', icon: Package, label: 'Products', roles: ['admin', 'employee'] },
+  { to: '/feeds', icon: Database, label: 'Feeds', roles: ['admin', 'employee', 'client'] },
+  { to: '/channels', icon: GitBranch, label: 'Channels', roles: ['admin', 'employee', 'client'] },
+  { to: '/products', icon: Package, label: 'Products', roles: ['admin', 'employee', 'client'] },
   { to: '/mapping', icon: Map, label: 'Attribute Mapping', roles: ['admin', 'employee'] },
-  { to: '/automations', icon: Activity, label: 'Automations', roles: ['admin', 'employee'] },
-  { to: '/sync', icon: Zap, label: 'Sync Jobs', roles: ['admin', 'employee'] },
-  { to: '/orders', icon: ShoppingBag, label: 'Orders', roles: ['admin', 'employee'] },
+  { to: '/automations', icon: Activity, label: 'Automations', roles: ['admin', 'employee', 'client'] },
+  { to: '/sync', icon: Zap, label: 'Sync Jobs', roles: ['admin', 'employee', 'client'] },
+  { to: '/orders', icon: ShoppingBag, label: 'Orders', roles: ['admin', 'employee', 'client'] },
   { to: '/tasks', icon: ClipboardList, label: 'Tasks', roles: ['admin', 'employee'] },
   { to: '/invoices', icon: FileText, label: 'Invoices', roles: ['admin', 'employee', 'client'] },
 ];
@@ -37,7 +37,11 @@ export default function Layout() {
       {/* ── Sidebar ── */}
       <aside className="sidebar">
         {/* Logo */}
-        <div style={{ padding: '24px 20px 20px', borderBottom: '1px solid rgba(255,165,0,0.1)' }}>
+        <div
+          style={{ padding: '24px 20px 20px', borderBottom: '1px solid rgba(255,165,0,0.1)', cursor: 'pointer' }}
+          onClick={() => navigate('/')}
+          title="Go to Dashboard"
+        >
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <div style={{
               width: 36, height: 36, borderRadius: 10,

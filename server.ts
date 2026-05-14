@@ -22,6 +22,7 @@ import noonRoutes from './src/server/routes/noon.js';
 import amazonRoutes from './src/server/routes/amazon.js';
 import { startScheduler } from './src/server/services/scheduler.js';
 import { query } from './src/server/db.js';
+import { blockClientWrites, type AuthRequest } from './src/server/middleware/auth.js';
 
 dotenv.config();
 
@@ -42,6 +43,9 @@ app.use('/webhooks', express.json({
   verify: (req, _res, buf) => { (req as unknown as Record<string, unknown>).rawBody = buf.toString('utf8'); },
 }));
 app.use(express.json({ limit: '10mb' }));
+
+// Block all write operations for client users (except order retry)
+app.use('/api', blockClientWrites as unknown as import('express').RequestHandler);
 
 // ── API Routes ─────────────────────────────────────────────────────────────
 app.use('/api/auth', authRoutes);
