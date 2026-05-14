@@ -460,12 +460,26 @@ export async function createOdooSaleOrder(
   }
 
   // 3. Create sale order
-  const orderId = await odooExecute(config, uid, 'sale.order', 'create', [{
+  let orderId: number;
+  const orderVals: Record<string, unknown> = {
     partner_id: partnerId,
     client_order_ref: shopifyOrder.name, // Shopify order number
     order_line: orderLines,
     ...(config.warehouseId ? { warehouse_id: config.warehouseId } : {}),
-  }]) as number;
+  };
+
+  try {
+    orderId = await odooExecute(config, uid, 'sale.order', 'create', [orderVals]) as number;
+  } catch (err) {
+    if (config.forceOrder && String(err).includes('exceeds available stock')) {
+      // Retry without warehouse constraint and with context to skip availability check
+      console.warn(`[OdooOrder] Stock validation failed, retrying with forceOrder context...`);
+      delete orderVals.warehouse_id;
+      orderId = await odooExecute(config, uid, 'sale.order', 'create', [orderVals], { context: { check_availability: false, skip_stock_validation: true } }) as number;
+    } else {
+      throw err;
+    }
+  }
 
   // 4. Confirm the order
   try {
