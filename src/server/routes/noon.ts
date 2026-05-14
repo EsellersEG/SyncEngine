@@ -150,19 +150,27 @@ router.post('/orders/fetch', async (req: AuthRequest, res) => {
     const credentials = parseNoonCredentials(channel.noon_credentials_json);
     const countryCode = channel.noon_country_code || 'AE';
 
-    // Fetch recent orders from Noon
+    // Fetch recent orders from Noon (FBPI orders)
+    const warehouseCode = channel.noon_warehouse_code || '';
+    const now = new Date();
+    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
     const ordersResult = await noonApiRequest(
       credentials,
       countryCode,
-      'GET',
-      '/seller/api/v1/orders?status=all&limit=50'
-    ) as { result?: { orders?: Array<Record<string, unknown>> } };
+      'POST',
+      '/fbpi/v1/fbpi-orders/list',
+      {
+        warehouse_code: warehouseCode,
+        created_after: thirtyDaysAgo.toISOString(),
+        created_before: now.toISOString(),
+      }
+    ) as { orders?: Array<Record<string, unknown>> };
 
-    const orders = ordersResult?.result?.orders || [];
+    const orders = ordersResult?.orders || [];
     let newCount = 0;
 
     for (const order of orders) {
-      const noonOrderId = String(order.order_id || order.orderId || '');
+      const noonOrderId = String(order.fbpi_order_nr || order.order_id || order.orderId || '');
       if (!noonOrderId) continue;
 
       // Upsert
@@ -179,11 +187,11 @@ router.post('/orders/fetch', async (req: AuthRequest, res) => {
             channel.client_id,
             channel_id,
             noonOrderId,
-            String(order.order_number || order.orderNumber || ''),
+            String(order.mp_order_nr || order.order_number || order.orderNumber || ''),
             'synced',
-            parseFloat(String(order.total || order.totalAmount || 0)),
-            String(order.customer_name || order.customerName || ''),
-            countryCode,
+            0,
+            '',
+            String(order.mp_country_code || countryCode),
             JSON.stringify(order),
           ]
         );

@@ -8,8 +8,8 @@
  *  - Rate-limited API calls
  *
  * Noon API endpoints used:
- *  - POST /seller/api/v1/stock/update — update stock levels
- *  - POST /seller/api/v1/pricing/upsert — batch upsert pricing
+ *  - POST /stock/v1/stock-update — update stock levels
+ *  - POST /pricing/v1/pricing/upsert — batch upsert pricing
  */
 
 import { query } from '../db.js';
@@ -156,8 +156,8 @@ export async function runNoonSyncJob(config: NoonSyncJobConfig): Promise<void> {
         try {
           const stockUpdates = buildStockPayload(batch, mappings, noonSkuMap, warehouseCode);
           if (stockUpdates.length > 0) {
-            await noonApiRequest(credentials, countryCode, 'POST', '/seller/api/v1/stock/update', {
-              stocks: stockUpdates,
+            await noonApiRequest(credentials, countryCode, 'POST', '/stock/v1/stock-update', {
+              items: stockUpdates.map(s => ({ warehouse_code: s.warehouseCode, partner_sku: s.partnerSku, qty: s.quantity })),
             });
             for (const update of stockUpdates) {
               await logEntry(jobId, update.partnerSku, 'updated', `Stock updated to ${update.quantity}`);
@@ -195,8 +195,8 @@ export async function runNoonSyncJob(config: NoonSyncJobConfig): Promise<void> {
               partnerSku, price, msrp, salePrice,
             }));
 
-            await noonApiRequest(credentials, countryCode, 'POST', '/seller/api/v1/pricing/upsert', {
-              prices: cleanPayload,
+            await noonApiRequest(credentials, countryCode, 'POST', '/pricing/v1/pricing/upsert', {
+              items: cleanPayload.map(p => ({ partner_sku: p.partnerSku, country_code: countryCode.toLowerCase(), price: p.price, msrp: p.msrp })),
             });
 
             for (const update of priceUpdates) {

@@ -77,11 +77,11 @@ export async function startContentExport(
       credentials,
       countryCode,
       'POST',
-      '/seller/api/v1/catalog/export',
-      { format: 'csv' }
-    ) as { result?: { jobId: string } };
+      '/impex/v1/export/create',
+      { export_category_code: 'catalog', params: {} }
+    ) as { export_code?: string };
 
-    const noonExportJobId = exportResult?.result?.jobId;
+    const noonExportJobId = exportResult?.export_code;
     if (noonExportJobId) {
       await query(
         'UPDATE noon_content_jobs SET export_job_id = $1 WHERE id = $2',
@@ -131,19 +131,20 @@ export async function checkContentExportStatus(contentJobId: string): Promise<{
     const statusResult = await noonApiRequest(
       credentials,
       countryCode,
-      'GET',
-      `/seller/api/v1/catalog/export/${job.export_job_id}/status`
-    ) as { result?: { status: string; downloadUrl?: string } };
+      'POST',
+      '/impex/v1/export/status',
+      { export_code: job.export_job_id }
+    ) as { export_status?: string; download_url?: string };
 
-    if (statusResult?.result?.status === 'completed' && statusResult.result.downloadUrl) {
+    if (statusResult?.export_status === 'COMPLETE' && statusResult.download_url) {
       await query(
         "UPDATE noon_content_jobs SET status = 'processing', csv_url = $1 WHERE id = $2",
-        [statusResult.result.downloadUrl, contentJobId]
+        [statusResult.download_url, contentJobId]
       );
-      return { status: 'processing', downloadUrl: statusResult.result.downloadUrl };
+      return { status: 'processing', downloadUrl: statusResult.download_url };
     }
 
-    if (statusResult?.result?.status === 'failed') {
+    if (statusResult?.export_status === 'ERROR') {
       await query(
         "UPDATE noon_content_jobs SET status = 'failed', error_message = 'Noon export failed', completed_at = NOW() WHERE id = $1",
         [contentJobId]

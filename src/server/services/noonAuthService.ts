@@ -1,15 +1,17 @@
 /**
  * Noon Auth Service
- * Handles authentication with Noon Seller Lab API.
- * 
- * Flow:
- *  1. Parse stored credentials JSON (contains key_id, private_key, channel_identifier)
- *  2. Generate JWT RS256 token signed with private key
- *  3. Cache tokens and handle refresh on 401
- *  4. Rate limit with 429 backoff
+ * Handles authentication with Noon Partner API (noon-api-gateway.noon.partners).
+ *
+ * Flow (per official docs):
+ *  1. Parse stored credentials JSON (key_id, private_key, channel_identifier, project_code)
+ *  2. Generate JWT with claims: sub=key_id, iat, jti=uuid — signed RS256
+ *  3. POST JWT to /identity/public/v1/api/login → get session cookies
+ *  4. Cache cookies, include them on every subsequent request
+ *  5. On 401, re-login to refresh session
  */
 
 import jwt from 'jsonwebtoken';
+import { randomUUID } from 'crypto';
 import { query } from '../db.js';
 
 export interface NoonCredentials {
@@ -21,45 +23,37 @@ export interface NoonCredentials {
 }
 
 interface NoonSession {
-  token: string;
+  cookies: string;   // "name1=value1; name2=value2"
   expiresAt: number;
 }
 
-const NOON_BASE_URLS: Record<string, string> = {
-  'AE': 'https://api.noon.partners',
-  'EG': 'https://api.noon.partners',
-};
-
-const TOKEN_CACHE = new Map<string, NoonSession>();
-const FETCH_TIMEOUT_MS = 30000;
+const NOON_BASE_URL = 'https://noon-api-gateway.noon.partners';
+const SESSION_CACHE = new Map<string, NoonSession>();
+const FETCH_TIMEOUT_MS = 30_000;
 const MAX_RETRIES = 6;
-const RETRY_DELAY_MS = 2000;
+const RETRY_DELAY_MS = 2_000;
+const SESSION_TTL_MS = 25 * 60 * 1000; // 25 min (sessions last ~30 min)
 
-/**
- * Parse credentials JSON stored in DB
- */
+// ── Credential parsing ───────────────────────────────────────────────────
+
 export function parseNoonCredentials(json: string): NoonCredentials {
   const parsed = JSON.parse(json);
 
-  // Noon Seller Lab JSON: { key_id, private_key, channel_identifier, project_code, type }
-  const keyId = parsed.key_id || parsed.keyId || parsed.accessKey || '';
+  const keyId = parsed.key_id || parsed.keyId || '';
   const privateKey = parsed.private_key || parsed.privateKey || '';
-  const channelIdentifier = parsed.channel_identifier || parsed.channelIdentifier || parsed.username || '';
+  const channelIdentifier = parsed.channel_identifier || parsed.channelIdentifier || '';
   const projectCode = parsed.project_code || parsed.projectCode || '';
 
   if (!keyId) {
     throw new Error('Noon credentials JSON must include "key_id". Download the JSON from Noon Seller Lab > Settings > API Credentials.');
   }
-
   if (!privateKey) {
-    throw new Error('Noon credentials JSON must include "private_key" (PEM RSA key). Download the JSON from Noon Seller Lab > Settings > API Credentials.');
+    throw new Error('Noon credentials JSON must include "private_key" (PEM RSA key). Download the JSON from Noon Seller Lab.');
   }
-
   if (!channelIdentifier) {
     throw new Error('Noon credentials JSON must include "channel_identifier" (e.g. user@pXXXXXX.idp.noon.partners).');
   }
 
-  // Extract sellerId from channel_identifier: syncengine@p170961.idp.noon.partners → p170961
   let sellerId = parsed.sellerId || parsed.seller_id || '';
   if (!sellerId) {
     const match = channelIdentifier.match(/@(p\d+)\./);
@@ -69,81 +63,85 @@ export function parseNoonCredentials(json: string): NoonCredentials {
     throw new Error('Could not extract sellerId from channel_identifier. Ensure it has format user@pXXXXXX.idp.noon.partners.');
   }
 
-  return {
-    keyId,
-    privateKey,
-    channelIdentifier,
-    sellerId,
-    projectCode,
-  };
+  return { keyId, privateKey, channelIdentifier, sellerId, projectCode };
 }
 
-/**
- * Generate a JWT token for Noon API authentication.
- * Signs with RS256 using the private key from credentials.
- */
+// ── JWT generation (sub=key_id, iat, jti=uuid, RS256) ────────────────────
+
 function generateNoonJwt(credentials: NoonCredentials): string {
   const now = Math.floor(Date.now() / 1000);
-  const payload = {
-    iss: credentials.channelIdentifier,
-    iat: now,
-    exp: now + 300, // 5 minutes
-  };
-  return jwt.sign(payload, credentials.privateKey, {
-    algorithm: 'RS256',
-    header: {
-      alg: 'RS256',
-      typ: 'JWT',
-      kid: credentials.keyId,
-    },
-  });
+  return jwt.sign(
+    { sub: credentials.keyId, iat: now, jti: randomUUID() },
+    credentials.privateKey,
+    { algorithm: 'RS256' }
+  );
 }
 
-/**
- * Get authentication headers for Noon API.
- * Generates a JWT Bearer token signed with the RSA private key.
- */
-export function getNoonAuthHeaders(credentials: NoonCredentials): Record<string, string> {
-  // Check cache first
-  const cacheKey = credentials.keyId;
-  const cached = TOKEN_CACHE.get(cacheKey);
-  const now = Date.now();
-  let token: string;
+// ── Session login (cookie-based) ─────────────────────────────────────────
 
-  if (cached && cached.expiresAt > now + 30_000) {
-    // Use cached token if it has >30s remaining
-    token = cached.token;
-  } else {
-    // Generate fresh JWT
-    token = generateNoonJwt(credentials);
-    TOKEN_CACHE.set(cacheKey, { token, expiresAt: now + 270_000 }); // ~4.5 min
-    console.log(`[NoonAuth] Generated new JWT for ${credentials.channelIdentifier}`);
+async function loginToNoon(credentials: NoonCredentials): Promise<string> {
+  const token = generateNoonJwt(credentials);
+  const res = await fetch(`${NOON_BASE_URL}/identity/public/v1/api/login`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'User-Agent': 'SyncEngine/1.0.0',
+    },
+    body: JSON.stringify({
+      token,
+      default_project_code: credentials.projectCode || null,
+    }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    let detail = text;
+    try { detail = JSON.parse(text).message || text; } catch { /* raw */ }
+    throw new Error(`Noon login failed (${res.status}): ${detail}`);
   }
 
-  return {
-    'Authorization': `Bearer ${token}`,
-    'Content-Type': 'application/json',
-    'Accept': 'application/json',
-  };
+  // Extract session cookies from Set-Cookie headers
+  const setCookieHeaders: string[] =
+    typeof (res.headers as any).getSetCookie === 'function'
+      ? (res.headers as any).getSetCookie()
+      : (res.headers.get('set-cookie') || '').split(/,(?=[^ ])/);
+
+  const cookies = setCookieHeaders
+    .map((c: string) => c.split(';')[0].trim())
+    .filter(Boolean)
+    .join('; ');
+
+  if (!cookies) {
+    throw new Error('Noon login succeeded but no session cookies returned');
+  }
+
+  console.log(`[NoonAuth] Logged in as ${credentials.channelIdentifier}`);
+  return cookies;
 }
 
-/**
- * Invalidate cached token (call on 401 to force refresh)
- */
-function invalidateNoonToken(credentials: NoonCredentials): void {
-  TOKEN_CACHE.delete(credentials.keyId);
+async function getNoonSessionCookies(credentials: NoonCredentials): Promise<string> {
+  const cacheKey = credentials.keyId;
+  const cached = SESSION_CACHE.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.cookies;
+  }
+  const cookies = await loginToNoon(credentials);
+  SESSION_CACHE.set(cacheKey, { cookies, expiresAt: Date.now() + SESSION_TTL_MS });
+  return cookies;
 }
 
-/**
- * Get base URL for Noon API based on country code
- */
-export function getNoonBaseUrl(countryCode: string): string {
-  return NOON_BASE_URLS[countryCode.toUpperCase()] || NOON_BASE_URLS['AE'];
+function invalidateNoonSession(credentials: NoonCredentials): void {
+  SESSION_CACHE.delete(credentials.keyId);
 }
 
-/**
- * Load Noon channel config from DB
- */
+// ── Base URL ─────────────────────────────────────────────────────────────
+
+export function getNoonBaseUrl(_countryCode?: string): string {
+  return NOON_BASE_URL;
+}
+
+// ── Load channel from DB ─────────────────────────────────────────────────
+
 export async function loadNoonChannel(channelId: string) {
   const result = await query(
     'SELECT id, client_id, name, type, noon_credentials_json, noon_warehouse_code, noon_country_code, settings FROM channels WHERE id = $1',
@@ -156,9 +154,8 @@ export async function loadNoonChannel(channelId: string) {
   return ch;
 }
 
-/**
- * Smart rate-limited fetch with retry for Noon API
- */
+// ── Fetch with retry + rate limit ────────────────────────────────────────
+
 export async function noonFetchWithRetry(
   url: string,
   options: RequestInit,
@@ -191,45 +188,43 @@ export async function noonFetchWithRetry(
     return noonFetchWithRetry(url, options, retries + 1);
   }
 
-  // 401 Unauthorized — token expired, invalidate cache and retry
-  if (res.status === 401 && retries < 2) {
-    console.log(`[NoonAuth] 401 Unauthorized, invalidating token and retrying (retry ${retries + 1})`);
-    // Invalidate from options headers isn't practical — caller should handle
-    await sleep(1000);
-    return noonFetchWithRetry(url, options, retries + 1);
-  }
-
   return res;
 }
 
-/**
- * Make an authenticated Noon API request
- */
+// ── Authenticated API request ────────────────────────────────────────────
+
 export async function noonApiRequest(
   credentials: NoonCredentials,
-  countryCode: string,
+  _countryCode: string,
   method: string,
   path: string,
   body?: unknown
 ): Promise<unknown> {
-  const baseUrl = getNoonBaseUrl(countryCode);
-  const url = `${baseUrl}${path}`;
+  const url = `${NOON_BASE_URL}${path}`;
 
-  // First attempt
-  let headers = getNoonAuthHeaders(credentials);
-  let options: RequestInit = { method, headers };
-  if (body) options.body = JSON.stringify(body);
+  const makeOptions = (cookies: string): RequestInit => {
+    const opts: RequestInit = {
+      method,
+      headers: {
+        'Cookie': cookies,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'User-Agent': 'SyncEngine/1.0.0',
+      },
+    };
+    if (body) opts.body = JSON.stringify(body);
+    return opts;
+  };
 
-  let res = await noonFetchWithRetry(url, options);
+  let cookies = await getNoonSessionCookies(credentials);
+  let res = await noonFetchWithRetry(url, makeOptions(cookies));
 
-  // On 401, invalidate token cache and retry with fresh JWT
+  // On 401, re-login and retry once
   if (res.status === 401) {
-    console.log(`[NoonAuth] 401 on ${method} ${path}, refreshing JWT...`);
-    invalidateNoonToken(credentials);
-    headers = getNoonAuthHeaders(credentials);
-    options = { method, headers };
-    if (body) options.body = JSON.stringify(body);
-    res = await noonFetchWithRetry(url, options);
+    console.log(`[NoonAuth] 401 on ${method} ${path}, re-logging in...`);
+    invalidateNoonSession(credentials);
+    cookies = await getNoonSessionCookies(credentials);
+    res = await noonFetchWithRetry(url, makeOptions(cookies));
   }
 
   const text = await res.text();
@@ -246,9 +241,8 @@ export async function noonApiRequest(
   return text ? JSON.parse(text) : {};
 }
 
-/**
- * Test Noon connection by fetching seller info
- */
+// ── Test connection ──────────────────────────────────────────────────────
+
 export async function testNoonConnection(
   credentialsJson: string,
   countryCode: string
@@ -259,21 +253,23 @@ export async function testNoonConnection(
       credentials,
       countryCode,
       'GET',
-      '/seller/api/v1/seller/info'
-    ) as { result?: { sellerId: string; name: string } };
+      '/identity/v1/whoami'
+    ) as { user_code?: string; username?: string };
 
-    if (result?.result) {
-      return { success: true, seller: { name: result.result.name, id: result.result.sellerId } };
-    }
-    return { success: true, seller: { name: credentials.sellerId, id: credentials.sellerId } };
+    return {
+      success: true,
+      seller: {
+        name: result?.username || credentials.channelIdentifier,
+        id: result?.user_code || credentials.sellerId,
+      },
+    };
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : 'Connection failed' };
   }
 }
 
-/**
- * Fetch warehouses from Noon
- */
+// ── Fetch warehouses ─────────────────────────────────────────────────────
+
 export async function fetchNoonWarehouses(
   credentialsJson: string,
   countryCode: string
@@ -282,12 +278,19 @@ export async function fetchNoonWarehouses(
   const result = await noonApiRequest(
     credentials,
     countryCode,
-    'GET',
-    '/seller/api/v1/warehouses'
-  ) as { result?: Array<{ code: string; name: string; country: string }> };
+    'POST',
+    '/warehouse_platform/v1/warehouses/list',
+    { next_token: null }
+  ) as { warehouses?: Array<{ warehouse_code: string; display_name: string; fulfillment_system_code: string; is_active: boolean }> };
 
-  return result?.result || [];
+  return (result?.warehouses || []).map(w => ({
+    code: w.warehouse_code,
+    name: w.display_name,
+    country: countryCode,
+  }));
 }
+
+// ── Helpers ──────────────────────────────────────────────────────────────
 
 function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
