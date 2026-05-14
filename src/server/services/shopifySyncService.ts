@@ -46,8 +46,16 @@ interface AttributeMapping {
   target_field: string;
 }
 
-const BATCH_SIZE = 10; // Turbo mode parallel batch
-const INDIVIDUAL_PARALLEL_SIZE = 12; // Individual sync parallel products
+interface SyncLogDetails {
+  stock_from: number | null;
+  stock_to: number | null;
+  price_from: string | null;
+  price_to: string | null;
+  warehouse_name: string | null;
+}
+
+const BATCH_SIZE = 25; // Turbo mode parallel batch
+const INDIVIDUAL_PARALLEL_SIZE = 20; // Individual sync parallel products
 const MAX_RETRIES = 8;
 const RETRY_DELAY_MS = 2000;
 
@@ -148,6 +156,23 @@ function sleep(ms: number) {
 // ── Metafield Definitions Cache ────────────────────────────────────────────
 const metafieldDefCache = new Map<string, { defs: Map<string, string>; fetchedAt: number }>();
 const METAFIELD_DEF_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+// ── Publication IDs Cache ──────────────────────────────────────────────────
+const publicationIdsCache = new Map<string, { ids: string[]; fetchedAt: number }>();
+const PUBLICATION_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+async function getCachedPublicationIds(channel: Channel): Promise<string[]> {
+  const cacheKey = channel.id;
+  const cached = publicationIdsCache.get(cacheKey);
+  if (cached && Date.now() - cached.fetchedAt < PUBLICATION_CACHE_TTL) {
+    return cached.ids;
+  }
+  const pubQuery = `{ publications(first: 20) { edges { node { id } } } }`;
+  const pubData = await shopifyGraphQL(channel, pubQuery) as { publications: { edges: Array<{ node: { id: string } }> } };
+  const ids = pubData.publications?.edges?.map(e => e.node.id) || [];
+  publicationIdsCache.set(cacheKey, { ids, fetchedAt: Date.now() });
+  return ids;
+}
 
 async function getMetafieldDefinitions(channel: Channel): Promise<Map<string, string>> {
   const cacheKey = channel.id;
@@ -526,8 +551,16 @@ async function turboSync(
     }
 
     const batch = products.slice(i, i + BATCH_SIZE);
-    await Promise.all(batch.map(p => syncProductTurbo(channel, p, mappings, metafieldMappings, shopifyMap, jobId, locationId, 0, priceAdjustmentPercent, priceRoundingMode, warehouseName, shopifyDefs)));
-    await query('UPDATE sync_jobs SET processed_count = $1 WHERE id = $2', [Math.min(i + BATCH_SIZE, products.length), jobId]);
+    const results = await Promise.all(batch.map(p => syncProductTurbo(channel, p, mappings, metafieldMappings, shopifyMap, jobId, locationId, 0, priceAdjustmentPercent, priceRoundingMode, warehouseName, shopifyDefs)));
+
+    // Batch counter update (one DB call per batch instead of per product)
+    const updated = results.filter(r => r === 'updated').length;
+    const skipped = results.filter(r => r === 'skipped').length;
+    const failed = results.filter(r => r === 'failed').length;
+    await query(
+      'UPDATE sync_jobs SET processed_count = $1, updated_count = updated_count + $2, skipped_count = skipped_count + $3, failed_count = failed_count + $4 WHERE id = $5',
+      [Math.min(i + BATCH_SIZE, products.length), updated, skipped, failed, jobId]
+    );
   }
 }
 
@@ -544,21 +577,38 @@ async function syncProductTurbo(
   priceRoundingMode: 'none' | 'up' | 'down' = 'none',
   warehouseName?: string,
   shopifyDefs: Map<string, string> = new Map(),
-): Promise<void> {
+): Promise<'updated' | 'skipped' | 'failed'> {
   const shopifyIds = shopifyMap.get(product.sku);
 
   if (!shopifyIds) {
     await logSyncEntry(jobId, product.sku, 'skipped', 'SKU not found in Shopify — use Sync All to create it');
-    await query('UPDATE sync_jobs SET skipped_count = skipped_count + 1 WHERE id = $1', [jobId]);
-    return;
+    return 'skipped';
   }
 
   try {
     const mapped = applyPriceAdjustment(applyMappings(product.raw_data, mappings), priceAdjustmentPercent, priceRoundingMode);
 
-    // Combined: Price + Metafields in minimal API calls
-    // 1. Product update with metafields (single call)
-    if (metafieldMappings.length > 0) {
+    // Detect changes — skip products where nothing changed
+    const newPrice = mapped.price ? String(mapped.price) : null;
+    const newCompareAtPrice = mapped.compare_at_price ? String(mapped.compare_at_price) : null;
+    const stockQty = mapped.inventory_quantity !== undefined && mapped.inventory_quantity !== null
+      ? parseInt(String(mapped.inventory_quantity))
+      : NaN;
+    const priceChanged = newPrice !== null && shopifyIds.price !== newPrice;
+    const compareAtPriceChanged = newCompareAtPrice !== null;
+    const stockChanged = !isNaN(stockQty) && shopifyIds.inventoryQuantity !== stockQty;
+    const hasMetafields = metafieldMappings.length > 0;
+
+    if (!priceChanged && !compareAtPriceChanged && !stockChanged && !hasMetafields) {
+      await logSyncEntry(jobId, product.sku, 'skipped', 'No changes detected');
+      return 'skipped';
+    }
+
+    // Fire all mutations in PARALLEL (instead of sequential)
+    const promises: Promise<unknown>[] = [];
+
+    // 1. Product update with metafields
+    if (hasMetafields) {
       const metafields = buildMetafields(product.raw_data, metafieldMappings, shopifyDefs);
       if (metafields.length > 0) {
         const updateMutation = `
@@ -568,22 +618,24 @@ async function syncProductTurbo(
               userErrors { field message }
             }
           }`;
-        const metaResult = await shopifyGraphQL(channel, updateMutation, {
+        promises.push(shopifyGraphQL(channel, updateMutation, {
           input: { id: shopifyIds.productId, metafields },
-        }) as { productUpdate?: { userErrors?: Array<{ field: string; message: string }> } };
-        const metaErrors = metaResult?.productUpdate?.userErrors;
-        if (metaErrors && metaErrors.length > 0) {
-          const details = metaErrors.map((e, i) => {
-            const mf = metafields[i] || metafields[0];
-            return `[${mf?.namespace}.${mf?.key} (type=${mf?.type}, value=${mf?.value?.substring(0, 80)})]: ${e.message}`;
-          }).join('; ');
-          throw new Error(`Metafield error: ${details}`);
-        }
+        }).then((r: unknown) => {
+          const res = r as { productUpdate?: { userErrors?: Array<{ field: string; message: string }> } };
+          const metaErrors = res?.productUpdate?.userErrors;
+          if (metaErrors && metaErrors.length > 0) {
+            const details = metaErrors.map((e, i) => {
+              const mf = metafields[i] || metafields[0];
+              return `[${mf?.namespace}.${mf?.key} (type=${mf?.type}, value=${mf?.value?.substring(0, 80)})]: ${e.message}`;
+            }).join('; ');
+            throw new Error(`Metafield error: ${details}`);
+          }
+        }));
       }
     }
 
     // 2. Price update via productVariantsBulkUpdate
-    if (mapped.price || mapped.compare_at_price) {
+    if (priceChanged || compareAtPriceChanged) {
       const priceQuery = `
         mutation variantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
           productVariantsBulkUpdate(productId: $productId, variants: $variants) {
@@ -591,27 +643,27 @@ async function syncProductTurbo(
             userErrors { field message }
           }
         }`;
-      const priceResult = await shopifyGraphQL(channel, priceQuery, {
+      promises.push(shopifyGraphQL(channel, priceQuery, {
         productId: shopifyIds.productId,
         variants: [{
           id: shopifyIds.variantId,
           price: mapped.price ? String(mapped.price) : undefined,
           compareAtPrice: mapped.compare_at_price ? String(mapped.compare_at_price) : undefined,
         }],
-      }) as { productVariantsBulkUpdate?: { userErrors?: Array<{ field: string; message: string }> } };
-      const priceErrors = priceResult?.productVariantsBulkUpdate?.userErrors;
-      if (priceErrors && priceErrors.length > 0) {
-        console.error(`[SyncFlow] Price update failed for ${product.sku}: ${JSON.stringify(priceErrors)}`);
-      }
+      }).then((r: unknown) => {
+        const res = r as { productVariantsBulkUpdate?: { userErrors?: Array<{ field: string; message: string }> } };
+        const priceErrors = res?.productVariantsBulkUpdate?.userErrors;
+        if (priceErrors && priceErrors.length > 0) {
+          console.error(`[SyncFlow] Price update failed for ${product.sku}: ${JSON.stringify(priceErrors)}`);
+        }
+      }));
     }
 
-    await updateInventoryItemDetails(channel, shopifyIds.inventoryItemId, mapped);
+    // 3. Inventory item details (tracking + weight) — skip if nothing to set
+    promises.push(updateInventoryItemDetails(channel, shopifyIds.inventoryItemId, mapped));
 
-    // 3. Stock update
-    const stockQty = mapped.inventory_quantity !== undefined && mapped.inventory_quantity !== null
-      ? parseInt(String(mapped.inventory_quantity))
-      : NaN;
-    if (!isNaN(stockQty) && locationId) {
+    // 4. Stock update
+    if (stockChanged && locationId) {
       const stockQuery = `
         mutation inventorySetQuantities($input: InventorySetQuantitiesInput!) {
           inventorySetQuantities(input: $input) {
@@ -619,7 +671,7 @@ async function syncProductTurbo(
             userErrors { field message }
           }
         }`;
-      const stockResult = await shopifyGraphQL(channel, stockQuery, {
+      promises.push(shopifyGraphQL(channel, stockQuery, {
         input: {
           name: "available",
           reason: "correction",
@@ -630,14 +682,18 @@ async function syncProductTurbo(
             quantity: stockQty,
           }],
         },
-      }) as { inventorySetQuantities?: { userErrors?: Array<{ field: string; message: string }> } };
-      const stockErrors = stockResult?.inventorySetQuantities?.userErrors;
-      if (stockErrors && stockErrors.length > 0) {
-        console.error(`[SyncFlow] Stock update failed for ${product.sku}: ${JSON.stringify(stockErrors)}`);
-      }
-    } else if (!locationId) {
+      }).then((r: unknown) => {
+        const res = r as { inventorySetQuantities?: { userErrors?: Array<{ field: string; message: string }> } };
+        const stockErrors = res?.inventorySetQuantities?.userErrors;
+        if (stockErrors && stockErrors.length > 0) {
+          console.error(`[SyncFlow] Stock update failed for ${product.sku}: ${JSON.stringify(stockErrors)}`);
+        }
+      }));
+    } else if (!locationId && !isNaN(stockQty)) {
       console.warn(`[SyncFlow] No locationId for stock update of ${product.sku}`);
     }
+
+    await Promise.all(promises);
 
     // For stock/price logging: prefer the mapped (adjusted) value, fall back to raw Odoo fields,
     // then fall back to the Shopify current value read from the product map.
@@ -664,7 +720,7 @@ async function syncProductTurbo(
       warehouse_name: warehouseName ?? null,
     };
     await logSyncEntry(jobId, product.sku, 'updated', 'Turbo sync succeeded', logDetails);
-    await query('UPDATE sync_jobs SET updated_count = updated_count + 1 WHERE id = $1', [jobId]);
+    return 'updated';
   } catch (err: unknown) {
     const errMsg = String(err);
     if (errMsg.includes('Throttled') && retries < MAX_RETRIES) {
@@ -672,7 +728,7 @@ async function syncProductTurbo(
       return syncProductTurbo(channel, product, mappings, metafieldMappings, shopifyMap, jobId, locationId, retries + 1, priceAdjustmentPercent, priceRoundingMode, warehouseName, shopifyDefs);
     }
     await logSyncEntry(jobId, product.sku, 'failed', errMsg);
-    await query('UPDATE sync_jobs SET failed_count = failed_count + 1 WHERE id = $1', [jobId]);
+    return 'failed';
   }
 }
 
@@ -708,7 +764,7 @@ async function individualSync(
 
   let processed = 0;
 
-  // Process in parallel batches (6 products at a time)
+  // Process in parallel batches
   for (let i = 0; i < groupedProducts.length; i += INDIVIDUAL_PARALLEL_SIZE) {
     if (await isJobCancelled(jobId)) {
       console.log(`[SyncFlow] Job ${jobId} cancelled at product group ${i}/${groupedProducts.length}`);
@@ -716,10 +772,16 @@ async function individualSync(
     }
 
     const batch = groupedProducts.slice(i, i + INDIVIDUAL_PARALLEL_SIZE);
-    await Promise.all(batch.map(group => syncGroupedProduct(channel, group, mappings, metafieldMappings, jobId, withImages, shopifyMap, locationId, priceAdjustmentPercent, priceRoundingMode, shopifyDefs)));
+    const results = await Promise.all(batch.map(group => syncGroupedProduct(channel, group, mappings, metafieldMappings, jobId, withImages, shopifyMap, locationId, priceAdjustmentPercent, priceRoundingMode, shopifyDefs)));
 
+    // Batch counter update
+    let updated = 0, created = 0, failed = 0;
+    for (const r of results) { updated += r.updated; created += r.created; failed += r.failed; }
     processed += batch.reduce((sum, group) => sum + group.rows.length, 0);
-    await query('UPDATE sync_jobs SET processed_count = $1 WHERE id = $2', [processed, jobId]);
+    await query(
+      'UPDATE sync_jobs SET processed_count = $1, updated_count = updated_count + $2, created_count = created_count + $3, failed_count = failed_count + $4 WHERE id = $5',
+      [processed, updated, created, failed, jobId]
+    );
   }
 }
 
@@ -735,7 +797,8 @@ async function syncGroupedProduct(
   priceAdjustmentPercent = 0,
   priceRoundingMode: 'none' | 'up' | 'down' = 'none',
   shopifyDefs: Map<string, string> = new Map(),
-) {
+): Promise<{ updated: number; created: number; failed: number }> {
+  const counts = { updated: 0, created: 0, failed: 0 };
   const firstRow = group.rows[0];
 
   if (group.rows.length > 1) {
@@ -744,15 +807,15 @@ async function syncGroupedProduct(
       validateVariantSKUs(group.rows);
       await syncVariantGroup(channel, group, mappings, metafieldMappings, withImages, shopifyMap, locationId, priceAdjustmentPercent, priceRoundingMode, shopifyDefs);
       await logSyncEntry(jobId, firstRow.sku, 'updated', `Variant group synced (${group.rows.length} rows, handle: ${group.handle})`);
-      await query('UPDATE sync_jobs SET updated_count = updated_count + $1 WHERE id = $2', [group.rows.length, jobId]);
+      counts.updated = group.rows.length;
     } catch (err) {
       const message = String(err);
       for (const row of group.rows) {
         await logSyncEntry(jobId, row.sku, 'failed', message);
       }
-      await query('UPDATE sync_jobs SET failed_count = failed_count + $1 WHERE id = $2', [group.rows.length, jobId]);
+      counts.failed = group.rows.length;
     }
-    return;
+    return counts;
   }
 
   await Promise.all(group.rows.map(async (product) => {
@@ -763,7 +826,7 @@ async function syncGroupedProduct(
       if (!shopifyIds) {
         await createShopifyProduct(channel, product.sku, mapped, withImages, mappings, product.raw_data, shopifyDefs);
         await logSyncEntry(jobId, product.sku, 'created', 'New product created in Shopify');
-        await query('UPDATE sync_jobs SET created_count = created_count + 1 WHERE id = $1', [jobId]);
+        counts.created++;
       } else {
         const updatePromises: Promise<unknown>[] = [];
         const updateMutation = `
@@ -890,13 +953,15 @@ async function syncGroupedProduct(
         await Promise.all(updatePromises);
 
         await logSyncEntry(jobId, product.sku, 'updated', 'Full sync succeeded');
-        await query('UPDATE sync_jobs SET updated_count = updated_count + 1 WHERE id = $1', [jobId]);
+        counts.updated++;
       }
     } catch (err) {
       await logSyncEntry(jobId, product.sku, 'failed', String(err));
-      await query('UPDATE sync_jobs SET failed_count = failed_count + 1 WHERE id = $1', [jobId]);
+      counts.failed++;
     }
   }));
+
+  return counts;
 }
 
 async function createShopifyProduct(channel: Channel, sku: string, mapped: Record<string, unknown>, withImages: boolean, mappings?: AttributeMapping[], rawData?: Record<string, unknown>, shopifyDefs: Map<string, string> = new Map()) {
@@ -1017,9 +1082,7 @@ async function createShopifyProduct(channel: Channel, sku: string, mapped: Recor
 // ── Publish product to all sales channels ──────────────────────────────────
 async function publishToSalesChannels(channel: Channel, productId: string) {
   try {
-    const pubQuery = `{ publications(first: 20) { edges { node { id name } } } }`;
-    const pubData = await shopifyGraphQL(channel, pubQuery) as { publications: { edges: Array<{ node: { id: string; name: string } }> } };
-    const publicationIds = pubData.publications?.edges?.map(e => e.node.id) || [];
+    const publicationIds = await getCachedPublicationIds(channel);
 
     if (publicationIds.length > 0) {
       const publishMutation = `
@@ -1041,9 +1104,7 @@ async function publishToSalesChannels(channel: Channel, productId: string) {
 
 async function setProductPublicationStatus(channel: Channel, productId: string, published: unknown) {
   try {
-    const pubQuery = `{ publications(first: 20) { edges { node { id } } } }`;
-    const pubData = await shopifyGraphQL(channel, pubQuery) as { publications: { edges: Array<{ node: { id: string } }> } };
-    const publicationIds = pubData.publications?.edges?.map(e => e.node.id) || [];
+    const publicationIds = await getCachedPublicationIds(channel);
 
     if (publicationIds.length === 0) {
       return;
@@ -1491,7 +1552,7 @@ function applyPriceAdjustment(
 }
 
 // ── Logging ────────────────────────────────────────────────────────────────
-async function logSyncEntry(jobId: string, sku: string, action: string, message: string) {
+async function logSyncEntry(jobId: string, sku: string, action: string, message: string, _details?: SyncLogDetails) {
   await query(
     'INSERT INTO sync_logs (job_id, sku, action, message) VALUES ($1, $2, $3, $4)',
     [jobId, sku, action, message]
