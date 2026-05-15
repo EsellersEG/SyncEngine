@@ -48,6 +48,7 @@ router.post('/', async (req: AuthRequest, res) => {
       sync_interval_minutes,
       order_tax_included_percent,
       odoo_force_order,
+      shopify_channel_id,
     } = req.body;
     if (!client_id || !name) {
       return res.status(400).json({ error: 'client_id and name required' });
@@ -58,14 +59,17 @@ router.post('/', async (req: AuthRequest, res) => {
     if (type === 'odoo' && (!odoo_url || !odoo_database || !odoo_username || !odoo_api_key)) {
       return res.status(400).json({ error: 'odoo_url, odoo_database, odoo_username, and odoo_api_key required for Odoo feed' });
     }
+    if (type === 'shopify' && !shopify_channel_id) {
+      return res.status(400).json({ error: 'shopify_channel_id required for Shopify feed' });
+    }
     const normalizedOdooSearchBy = odoo_search_by === 'sku' || odoo_search_by === 'ean' || odoo_search_by === 'name'
       ? odoo_search_by
       : 'automatic';
     const result = await query(
-      `INSERT INTO feeds (client_id, name, type, spreadsheet_id, sheet_name, header_row, service_account_json, odoo_url, odoo_database, odoo_username, odoo_api_key, odoo_search_by, odoo_warehouse_id, odoo_warehouse_name, sync_interval_minutes, order_tax_included_percent, odoo_force_order)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+      `INSERT INTO feeds (client_id, name, type, spreadsheet_id, sheet_name, header_row, service_account_json, odoo_url, odoo_database, odoo_username, odoo_api_key, odoo_search_by, odoo_warehouse_id, odoo_warehouse_name, sync_interval_minutes, order_tax_included_percent, odoo_force_order, shopify_channel_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
        RETURNING *`,
-      [client_id, name, type, spreadsheet_id || '', sheet_name, header_row, service_account_json || null, odoo_url || null, odoo_database || null, odoo_username || null, odoo_api_key || null, normalizedOdooSearchBy, odoo_warehouse_id ? parseInt(odoo_warehouse_id) : null, odoo_warehouse_name || null, sync_interval_minutes || null, order_tax_included_percent ? parseFloat(order_tax_included_percent) : null, !!odoo_force_order]
+      [client_id, name, type, spreadsheet_id || '', sheet_name, header_row, service_account_json || null, odoo_url || null, odoo_database || null, odoo_username || null, odoo_api_key || null, normalizedOdooSearchBy, odoo_warehouse_id ? parseInt(odoo_warehouse_id) : null, odoo_warehouse_name || null, sync_interval_minutes || null, order_tax_included_percent ? parseFloat(order_tax_included_percent) : null, !!odoo_force_order, shopify_channel_id || null]
     );
     return res.status(201).json(result.rows[0]);
   } catch (err) {
@@ -94,6 +98,7 @@ router.patch('/:id', async (req, res) => {
       sync_interval_minutes,
       order_tax_included_percent,
       odoo_force_order,
+      shopify_channel_id,
     } = req.body;
     const normalizedOdooSearchBy = odoo_search_by === 'sku' || odoo_search_by === 'ean' || odoo_search_by === 'name'
       ? odoo_search_by
@@ -118,9 +123,10 @@ router.patch('/:id', async (req, res) => {
         sync_interval_minutes = $14,
         order_tax_included_percent = $15,
         odoo_force_order = COALESCE($16, odoo_force_order),
+        shopify_channel_id = COALESCE($17, shopify_channel_id),
         updated_at = NOW()
-       WHERE id = $17 RETURNING *`,
-      [name, type, spreadsheet_id, sheet_name, header_row, is_active, odoo_url, odoo_database, odoo_username, odoo_api_key, normalizedOdooSearchBy, odoo_warehouse_id !== undefined ? (odoo_warehouse_id ? parseInt(odoo_warehouse_id) : null) : null, odoo_warehouse_name || null, sync_interval_minutes ?? null, order_tax_included_percent !== undefined ? (order_tax_included_percent ? parseFloat(order_tax_included_percent) : null) : null, odoo_force_order !== undefined ? !!odoo_force_order : null, req.params.id]
+       WHERE id = $18 RETURNING *`,
+      [name, type, spreadsheet_id, sheet_name, header_row, is_active, odoo_url, odoo_database, odoo_username, odoo_api_key, normalizedOdooSearchBy, odoo_warehouse_id !== undefined ? (odoo_warehouse_id ? parseInt(odoo_warehouse_id) : null) : null, odoo_warehouse_name || null, sync_interval_minutes ?? null, order_tax_included_percent !== undefined ? (order_tax_included_percent ? parseFloat(order_tax_included_percent) : null) : null, odoo_force_order !== undefined ? !!odoo_force_order : null, shopify_channel_id || null, req.params.id]
     );
     if (!result.rows[0]) return res.status(404).json({ error: 'Feed not found' });
     return res.json(result.rows[0]);

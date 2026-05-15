@@ -15,25 +15,29 @@ interface LineItem {
 interface Order {
   id: string;
   channel_id: string;
-  shopify_order_id: string;
-  shopify_order_number: string;
+  source: 'shopify' | 'noon';
+  // Shopify fields
+  shopify_order_id?: string;
+  shopify_order_number?: string;
   shopify_store_url?: string;
-  odoo_order_id: number | null;
-  odoo_order_name: string | null;
+  odoo_order_id?: number | null;
+  odoo_order_name?: string | null;
+  customer_email?: string;
+  // Noon fields
+  noon_order_id?: string;
+  noon_order_number?: string;
+  customer_name?: string;
+  country_code?: string;
+  order_type?: string;
+  shopify_channel_id?: string;
+  // Common
   status: string;
   total_price: string;
-  customer_email: string;
   error_message: string | null;
   synced_at: string | null;
   created_at: string;
   channel_name?: string;
-  raw_data?: {
-    currency?: string;
-    line_items?: LineItem[];
-    shipping_address?: { name?: string; address1?: string; city?: string; country?: string };
-    financial_status?: string;
-    fulfillment_status?: string | null;
-  };
+  raw_data?: Record<string, unknown>;
 }
 
 function currencySymbol(code?: string): string {
@@ -51,6 +55,7 @@ export default function OrdersPage() {
   const [retrying, setRetrying] = useState<string | null>(null);
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [modalLoading, setModalLoading] = useState(false);
+  const [sourceFilter, setSourceFilter] = useState<'all' | 'shopify' | 'noon'>('all');
 
   async function fetchOrders() {
     try {
@@ -127,12 +132,32 @@ export default function OrdersPage() {
     }
   };
 
+  const sourceBadge = (source: string, orderType?: string) => {
+    if (source === 'noon') {
+      const label = orderType ? `Noon ${orderType.toUpperCase()}` : 'Noon';
+      return <span className="badge badge-warning" style={{ fontSize: 10 }}>{label}</span>;
+    }
+    return <span className="badge badge-info" style={{ fontSize: 10 }}>Shopify</span>;
+  };
+
+  const getOrderNumber = (o: Order) => o.source === 'noon' ? (o.noon_order_number || o.noon_order_id || '—') : (o.shopify_order_number || '—');
+  const getCustomer = (o: Order) => o.source === 'noon' ? (o.customer_name || '—') : (o.customer_email || '—');
+  const getLineItems = (o: Order): LineItem[] => {
+    if (o.source === 'noon') {
+      const items = (o.raw_data?.items || o.raw_data?.line_items || []) as Array<Record<string, unknown>>;
+      return items.map(i => ({ name: String(i.name || i.skuName || i.sku || ''), quantity: Number(i.quantity || 1), price: String(i.price || i.unitPrice || '0'), sku: String(i.sku || '') }));
+    }
+    return ((o.raw_data?.line_items || []) as LineItem[]);
+  };
+
+  const filtered = sourceFilter === 'all' ? orders : orders.filter(o => o.source === sourceFilter);
+
   return (
     <div className="animate-fade-in">
       <div className="page-header">
         <div>
           <h1 className="page-title">Orders</h1>
-          <p className="page-subtitle">Shopify → Odoo order synchronization</p>
+          <p className="page-subtitle">All orders from Shopify &amp; Noon</p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           {!isClient && (
@@ -147,22 +172,35 @@ export default function OrdersPage() {
       </div>
 
       <div className="page-body">
+        {/* Source Filter */}
+        <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+          {(['all', 'shopify', 'noon'] as const).map(s => (
+            <button key={s} className={`btn ${sourceFilter === s ? 'btn-primary' : 'btn-secondary'} btn-sm`}
+              onClick={() => setSourceFilter(s)}>
+              {s === 'all' ? 'All Orders' : s === 'shopify' ? 'Shopify' : 'Noon'}
+              <span style={{ marginLeft: 6, opacity: 0.7 }}>
+                {s === 'all' ? orders.length : orders.filter(o => o.source === s).length}
+              </span>
+            </button>
+          ))}
+        </div>
+
         {/* Stats */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
           <div className="glass-card" style={{ padding: 16, textAlign: 'center' }}>
-            <div style={{ fontSize: 24, fontWeight: 700, color: '#e2e8f0' }}>{orders.length}</div>
+            <div style={{ fontSize: 24, fontWeight: 700, color: '#e2e8f0' }}>{filtered.length}</div>
             <div style={{ fontSize: 12, color: '#64748b' }}>Total Orders</div>
           </div>
           <div className="glass-card" style={{ padding: 16, textAlign: 'center' }}>
-            <div style={{ fontSize: 24, fontWeight: 700, color: '#4ade80' }}>{orders.filter(o => o.status === 'synced').length}</div>
+            <div style={{ fontSize: 24, fontWeight: 700, color: '#4ade80' }}>{filtered.filter(o => o.status === 'synced').length}</div>
             <div style={{ fontSize: 12, color: '#64748b' }}>Synced</div>
           </div>
           <div className="glass-card" style={{ padding: 16, textAlign: 'center' }}>
-            <div style={{ fontSize: 24, fontWeight: 700, color: '#fbbf24' }}>{orders.filter(o => o.status === 'pending').length}</div>
+            <div style={{ fontSize: 24, fontWeight: 700, color: '#fbbf24' }}>{filtered.filter(o => o.status === 'pending').length}</div>
             <div style={{ fontSize: 12, color: '#64748b' }}>Pending</div>
           </div>
           <div className="glass-card" style={{ padding: 16, textAlign: 'center' }}>
-            <div style={{ fontSize: 24, fontWeight: 700, color: '#f87171' }}>{orders.filter(o => o.status === 'failed').length}</div>
+            <div style={{ fontSize: 24, fontWeight: 700, color: '#f87171' }}>{filtered.filter(o => o.status === 'failed').length}</div>
             <div style={{ fontSize: 12, color: '#64748b' }}>Failed</div>
           </div>
         </div>
@@ -171,17 +209,18 @@ export default function OrdersPage() {
           <div style={{ textAlign: 'center', paddingTop: 60 }}>
             <div className="spinner" style={{ width: 28, height: 28, border: '3px solid rgba(79,110,247,0.2)', borderTopColor: '#4f6ef7', borderRadius: '50%', margin: '0 auto' }} />
           </div>
-        ) : orders.length === 0 ? (
+        ) : filtered.length === 0 ? (
           <div className="glass-card" style={{ padding: 64, textAlign: 'center' }}>
             <ShoppingBag size={40} color="#334155" style={{ margin: '0 auto 16px' }} />
-            <p style={{ color: '#475569', fontSize: 16, fontWeight: 600, marginBottom: 8 }}>No orders synced yet</p>
-            <p style={{ color: '#334155', fontSize: 14 }}>Orders will appear here when Shopify sends webhook notifications. Register webhooks in Channel settings.</p>
+            <p style={{ color: '#475569', fontSize: 16, fontWeight: 600, marginBottom: 8 }}>No orders yet</p>
+            <p style={{ color: '#334155', fontSize: 14 }}>Orders will appear here from Shopify webhooks and Noon imports.</p>
           </div>
         ) : (
           <div className="table-container">
             <table className="table">
               <thead>
                 <tr>
+                  <th>Source</th>
                   <th>Order #</th>
                   <th>Customer</th>
                   <th>Total</th>
@@ -192,18 +231,24 @@ export default function OrdersPage() {
                 </tr>
               </thead>
               <tbody>
-                {orders.map(order => {
-                  const sym = currencySymbol(order.raw_data?.currency);
+                {filtered.map(order => {
+                  const raw = order.raw_data as Record<string, unknown> | undefined;
+                  const currency = raw?.currency as string | undefined;
+                  const sym = currencySymbol(currency);
                   return (
                     <tr key={order.id} style={{ cursor: 'pointer' }} onClick={() => openOrder(order.id)}>
+                      <td>{sourceBadge(order.source, order.order_type)}</td>
                       <td>
-                        <div style={{ fontWeight: 600, color: '#4f6ef7' }}>{order.shopify_order_number}</div>
+                        <div style={{ fontWeight: 600, color: '#4f6ef7' }}>{getOrderNumber(order)}</div>
                       </td>
-                      <td style={{ fontSize: 13, color: '#94a3b8' }}>{order.customer_email || '—'}</td>
+                      <td style={{ fontSize: 13, color: '#94a3b8' }}>{getCustomer(order)}</td>
                       <td style={{ fontWeight: 600, color: '#e2e8f0' }}>{sym}{order.total_price}</td>
                       <td onClick={e => e.stopPropagation()}>{statusBadge(order.status)}</td>
                       <td style={{ fontSize: 13, color: '#94a3b8', fontFamily: 'var(--font-mono)' }}>
-                        {order.odoo_order_name || (order.odoo_order_id ? `#${order.odoo_order_id}` : '—')}
+                        {order.source === 'noon'
+                          ? (order.shopify_order_id ? `→ Shopify` : '—')
+                          : (order.odoo_order_name || (order.odoo_order_id ? `#${order.odoo_order_id}` : '—'))
+                        }
                       </td>
                       <td style={{ fontSize: 13, color: '#64748b' }}>
                         {new Date(order.created_at).toLocaleString()}
@@ -241,7 +286,10 @@ export default function OrdersPage() {
             {/* Header */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
               <div>
-                <div style={{ fontSize: 20, fontWeight: 700, color: '#e2e8f0' }}>{selectedOrder.shopify_order_number}</div>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: '#e2e8f0' }}>{getOrderNumber(selectedOrder)}</div>
+                  {sourceBadge(selectedOrder.source, selectedOrder.order_type)}
+                </div>
                 <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
                   {selectedOrder.channel_name} · {new Date(selectedOrder.created_at).toLocaleString()}
                 </div>
@@ -259,36 +307,46 @@ export default function OrdersPage() {
                 <div className="spinner" style={{ width: 24, height: 24, border: '3px solid rgba(79,110,247,0.2)', borderTopColor: '#4f6ef7', borderRadius: '50%', margin: '0 auto' }} />
               </div>
             ) : (() => {
-              const raw = selectedOrder.raw_data;
-              const sym = currencySymbol(raw?.currency);
-              const shopifyUrl = selectedOrder.shopify_store_url
+              const raw = selectedOrder.raw_data as Record<string, unknown> | undefined;
+              const currency = raw?.currency as string | undefined;
+              const sym = currencySymbol(currency);
+              const isNoon = selectedOrder.source === 'noon';
+              const shopifyUrl = !isNoon && selectedOrder.shopify_store_url
                 ? `https://${selectedOrder.shopify_store_url.replace(/^https?:\/\//, '')}/admin/orders/${selectedOrder.shopify_order_id}`
                 : null;
+              const lineItems = getLineItems(selectedOrder);
+              const shipping = raw?.shipping_address as { name?: string; address1?: string; city?: string; country?: string } | undefined;
               return (
                 <>
                   {/* Customer & Shipping */}
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
                     <div className="glass-card" style={{ padding: 14 }}>
                       <div style={{ fontSize: 11, color: '#64748b', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Customer</div>
-                      <div style={{ fontSize: 13, color: '#e2e8f0' }}>{selectedOrder.customer_email || '—'}</div>
+                      <div style={{ fontSize: 13, color: '#e2e8f0' }}>{getCustomer(selectedOrder)}</div>
                     </div>
                     <div className="glass-card" style={{ padding: 14 }}>
-                      <div style={{ fontSize: 11, color: '#64748b', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Ship To</div>
+                      <div style={{ fontSize: 11, color: '#64748b', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                        {isNoon ? 'Country' : 'Ship To'}
+                      </div>
                       <div style={{ fontSize: 13, color: '#e2e8f0' }}>
-                        {raw?.shipping_address?.name && <div>{raw.shipping_address.name}</div>}
-                        {raw?.shipping_address?.address1 && <div style={{ color: '#94a3b8' }}>{raw.shipping_address.address1}</div>}
-                        {raw?.shipping_address?.city && <div style={{ color: '#94a3b8' }}>{raw.shipping_address.city}, {raw.shipping_address.country}</div>}
-                        {!raw?.shipping_address && '—'}
+                        {isNoon ? (selectedOrder.country_code || '—') : (
+                          <>
+                            {shipping?.name && <div>{shipping.name}</div>}
+                            {shipping?.address1 && <div style={{ color: '#94a3b8' }}>{shipping.address1}</div>}
+                            {shipping?.city && <div style={{ color: '#94a3b8' }}>{shipping.city}, {shipping.country}</div>}
+                            {!shipping && '—'}
+                          </>
+                        )}
                       </div>
                     </div>
                   </div>
 
                   {/* Line Items */}
-                  {raw?.line_items && raw.line_items.length > 0 && (
+                  {lineItems.length > 0 && (
                     <div style={{ marginBottom: 16 }}>
                       <div style={{ fontSize: 12, fontWeight: 600, color: '#64748b', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Items</div>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                        {raw.line_items.map((li, i) => (
+                        {lineItems.map((li, i) => (
                           <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '9px 12px', background: 'rgba(255,255,255,0.03)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.05)' }}>
                             <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
                               <Package size={12} color="#475569" />
@@ -309,12 +367,24 @@ export default function OrdersPage() {
 
                   {/* Total */}
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 0', borderTop: '1px solid rgba(255,255,255,0.06)', marginBottom: 16 }}>
-                    <div style={{ fontSize: 13, color: '#94a3b8' }}>Total · {raw?.currency || 'USD'}</div>
+                    <div style={{ fontSize: 13, color: '#94a3b8' }}>Total · {(currency as string) || 'USD'}</div>
                     <div style={{ fontSize: 18, fontWeight: 700, color: '#e2e8f0' }}>{sym}{selectedOrder.total_price}</div>
                   </div>
 
-                  {/* Odoo Sale Order */}
-                  {(selectedOrder.odoo_order_name || selectedOrder.odoo_order_id) && (
+                  {/* Noon → Shopify link */}
+                  {isNoon && selectedOrder.shopify_order_id && (
+                    <div className="glass-card" style={{ padding: 14, marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div>
+                        <div style={{ fontSize: 11, color: '#64748b', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Synced to Shopify</div>
+                        <div style={{ fontSize: 15, fontWeight: 700, color: '#4ade80' }}>
+                          Order #{selectedOrder.shopify_order_id}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Odoo Sale Order (Shopify orders only) */}
+                  {!isNoon && (selectedOrder.odoo_order_name || selectedOrder.odoo_order_id) && (
                     <div className="glass-card" style={{ padding: 14, marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <div>
                         <div style={{ fontSize: 11, color: '#64748b', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Odoo Sale Order</div>
@@ -343,7 +413,7 @@ export default function OrdersPage() {
                         <ExternalLink size={13} /> View in Shopify
                       </a>
                     )}
-                    {selectedOrder.status === 'failed' && (
+                    {!isNoon && selectedOrder.status === 'failed' && (
                       <button
                         className="btn btn-primary"
                         style={{ flex: 1 }}
@@ -354,7 +424,7 @@ export default function OrdersPage() {
                         Retry Odoo Sync
                       </button>
                     )}
-                    {selectedOrder.status === 'pending' && (
+                    {!isNoon && selectedOrder.status === 'pending' && (
                       <button
                         className="btn btn-primary"
                         style={{ flex: 1 }}

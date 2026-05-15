@@ -16,8 +16,10 @@ interface Feed {
   order_tax_included_percent?: number | null;
   odoo_force_order?: boolean;
   sync_interval_minutes?: number | null;
+  shopify_channel_id?: string | null;
 }
 interface Client { id: string; name: string; }
+interface Channel { id: string; name: string; type: string; client_id: string; }
 
 export default function FeedsPage() {
   const { isClient } = useAuth();
@@ -43,20 +45,24 @@ export default function FeedsPage() {
     order_tax_included_percent: '',
     odoo_force_order: false,
     sync_interval_minutes: '',
+    shopify_channel_id: '',
   });
   const [error, setError] = useState('');
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
   const [odooWarehouses, setOdooWarehouses] = useState<Array<{ id: number; name: string }>>([]);
   const [loadingWarehouses, setLoadingWarehouses] = useState(false);
+  const [shopifyChannels, setShopifyChannels] = useState<Channel[]>([]);
 
   useEffect(() => {
     Promise.all([
       api.get(`/feeds${clientId ? `?client_id=${clientId}` : ''}`),
       api.get('/clients'),
-    ]).then(([f, c]) => {
+      api.get('/channels'),
+    ]).then(([f, c, ch]) => {
       setFeeds(f as Feed[]);
       setClients(c as Client[]);
+      setShopifyChannels((ch as Channel[]).filter(x => x.type === 'shopify'));
     }).finally(() => setLoading(false));
   }, [clientId]);
 
@@ -74,6 +80,8 @@ export default function FeedsPage() {
         payload.spreadsheet_id = form.spreadsheet_id;
         payload.sheet_name = form.sheet_name;
         payload.header_row = form.header_row;
+      } else if (form.type === 'shopify') {
+        payload.shopify_channel_id = form.shopify_channel_id;
       } else {
         payload.odoo_url = form.odoo_url;
         payload.odoo_database = form.odoo_database;
@@ -180,7 +188,7 @@ export default function FeedsPage() {
 
   function openCreateModal() {
     setEditingFeed(null);
-    setForm({ client_id: clientId || '', name: '', type: 'google_sheets', spreadsheet_id: '', sheet_name: 'Sheet1', header_row: 1, odoo_url: '', odoo_database: '', odoo_username: '', odoo_api_key: '', odoo_search_by: 'automatic', odoo_warehouse_id: '', odoo_warehouse_name: '', order_tax_included_percent: '', odoo_force_order: false, sync_interval_minutes: '' });
+    setForm({ client_id: clientId || '', name: '', type: 'google_sheets', spreadsheet_id: '', sheet_name: 'Sheet1', header_row: 1, odoo_url: '', odoo_database: '', odoo_username: '', odoo_api_key: '', odoo_search_by: 'automatic', odoo_warehouse_id: '', odoo_warehouse_name: '', order_tax_included_percent: '', odoo_force_order: false, sync_interval_minutes: '', shopify_channel_id: '' });
     setError('');
     setTestResult(null);
     setShowModal(true);
@@ -236,12 +244,12 @@ export default function FeedsPage() {
                     <td>
                       <div style={{ fontWeight: 600, color: '#e2e8f0' }}>{feed.name}</div>
                       <div style={{ fontSize: 11, color: '#475569', fontFamily: 'var(--font-mono)', marginTop: 2 }}>
-                        {feed.type === 'odoo' ? feed.odoo_url?.replace('https://', '') : `${feed.spreadsheet_id?.slice(0, 20)}...`}
+                        {feed.type === 'odoo' ? feed.odoo_url?.replace('https://', '') : feed.type === 'shopify' ? 'Shopify Store' : `${feed.spreadsheet_id?.slice(0, 20)}...`}
                       </div>
                     </td>
                     <td>
-                      <span className={`badge ${feed.type === 'odoo' ? 'badge-warning' : 'badge-info'}`}>
-                        {feed.type === 'odoo' ? 'Odoo' : 'Google Sheets'}
+                      <span className={`badge ${feed.type === 'odoo' ? 'badge-warning' : feed.type === 'shopify' ? 'badge-success' : 'badge-info'}`}>
+                        {feed.type === 'odoo' ? 'Odoo' : feed.type === 'shopify' ? 'Shopify' : 'Google Sheets'}
                       </span>
                     </td>
                     <td>
@@ -284,6 +292,7 @@ export default function FeedsPage() {
                             order_tax_included_percent: feed.order_tax_included_percent ? String(feed.order_tax_included_percent) : '',
                             odoo_force_order: !!feed.odoo_force_order,
                             sync_interval_minutes: feed.sync_interval_minutes ? String(feed.sync_interval_minutes) : '',
+                            shopify_channel_id: feed.shopify_channel_id || '',
                           });
                           setError('');
                           setTestResult(null);
@@ -355,6 +364,10 @@ export default function FeedsPage() {
                     onClick={() => setForm(f => ({ ...f, type: 'odoo' }))}>
                     Odoo
                   </button>
+                  <button type="button" className={`btn ${form.type === 'shopify' ? 'btn-primary' : 'btn-secondary'} btn-sm`} style={{ flex: 1 }}
+                    onClick={() => setForm(f => ({ ...f, type: 'shopify' }))}>
+                    Shopify
+                  </button>
                 </div>
               </div>
 
@@ -383,6 +396,37 @@ export default function FeedsPage() {
                   <div style={{ background: 'rgba(79,110,247,0.06)', border: '1px solid rgba(79,110,247,0.15)', borderRadius: 8, padding: '10px 12px', display: 'flex', gap: 8, alignItems: 'flex-start' }}>
                     <AlertCircle size={14} color="#6b87ff" style={{ flexShrink: 0, marginTop: 1 }} />
                     <span style={{ fontSize: 12, color: '#94a3b8' }}>Ensure your Google service account has Viewer access to this sheet.</span>
+                  </div>
+                </>
+              )}
+
+              {/* Shopify Fields */}
+              {form.type === 'shopify' && (
+                <>
+                  <div className="form-group">
+                    <label className="label">Shopify Channel</label>
+                    {(() => {
+                      const filtered = form.client_id
+                        ? shopifyChannels.filter(ch => ch.client_id === form.client_id)
+                        : shopifyChannels;
+                      return filtered.length > 0 ? (
+                        <select className="input" value={form.shopify_channel_id}
+                          onChange={e => setForm(f => ({ ...f, shopify_channel_id: e.target.value }))} required>
+                          <option value="">Select a Shopify channel...</option>
+                          {filtered.map(ch => (
+                            <option key={ch.id} value={ch.id}>{ch.name}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <div style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.15)', borderRadius: 8, padding: '10px 12px', fontSize: 12, color: '#f87171' }}>
+                          No Shopify channels found{form.client_id ? ' for this client' : ''}. Create a Shopify channel first.
+                        </div>
+                      );
+                    })()}
+                  </div>
+                  <div style={{ background: 'rgba(79,110,247,0.06)', border: '1px solid rgba(79,110,247,0.15)', borderRadius: 8, padding: '10px 12px', display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                    <AlertCircle size={14} color="#6b87ff" style={{ flexShrink: 0, marginTop: 1 }} />
+                    <span style={{ fontSize: 12, color: '#94a3b8' }}>Products will be imported from the selected Shopify store. Uses the channel&apos;s existing API credentials.</span>
                   </div>
                 </>
               )}

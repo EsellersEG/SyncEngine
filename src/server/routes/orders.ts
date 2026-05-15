@@ -11,8 +11,10 @@ router.get('/export', async (req: AuthRequest, res) => {
   try {
     const { channel_id, status } = req.query;
     const isAdmin = req.user!.role === 'admin';
-    const result = await query(
-      `SELECT o.*, ch.name as channel_name
+
+    // Shopify orders
+    const shopifyResult = await query(
+      `SELECT o.*, ch.name as channel_name, 'shopify' as source
        FROM orders o
        LEFT JOIN channels ch ON o.channel_id = ch.id
        ${isAdmin ? '' : 'JOIN user_clients uc ON uc.client_id = o.client_id AND uc.user_id = $3'}
@@ -23,20 +25,38 @@ router.get('/export', async (req: AuthRequest, res) => {
       isAdmin ? [channel_id || null, status || null] : [channel_id || null, status || null, req.user!.id]
     );
 
+    // Noon orders
+    const noonResult = await query(
+      `SELECT no.*, ch.name as channel_name, 'noon' as source
+       FROM noon_orders no
+       LEFT JOIN channels ch ON no.channel_id = ch.id
+       ${isAdmin ? '' : 'JOIN user_clients uc ON uc.client_id = no.client_id AND uc.user_id = $3'}
+       WHERE ($1::uuid IS NULL OR no.channel_id = $1::uuid)
+         AND ($2::text IS NULL OR no.status = $2::text)
+       ORDER BY no.created_at DESC
+       LIMIT 10000`,
+      isAdmin ? [channel_id || null, status || null] : [channel_id || null, status || null, req.user!.id]
+    );
+
+    const allOrders = [...shopifyResult.rows, ...noonResult.rows]
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
     const escape = (v: unknown) => {
       if (v == null) return '';
       const s = String(v).replace(/"/g, '""');
       return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s}"` : s;
     };
 
-    const headers = ['Order #', 'Customer Email', 'Total Price', 'Status', 'Odoo Order', 'Channel', 'Error', 'Synced At', 'Created At', 'Items'];
-    const rows = result.rows.map(o => {
-      const items = (o.raw_data?.line_items || [])
-        .map((li: { name: string; quantity: number; price: string }) => `${li.name} x${li.quantity} @ ${li.price}`)
-        .join(' | ');
+    const headers = ['Source', 'Order #', 'Customer', 'Total Price', 'Status', 'Odoo Order', 'Channel', 'Error', 'Synced At', 'Created At', 'Items'];
+    const rows = allOrders.map(o => {
+      const isNoon = o.source === 'noon';
+      const items = isNoon
+        ? (o.raw_data?.items || []).map((li: { name: string; quantity: number; price: number }) => `${li.name} x${li.quantity} @ ${li.price}`).join(' | ')
+        : (o.raw_data?.line_items || []).map((li: { name: string; quantity: number; price: string }) => `${li.name} x${li.quantity} @ ${li.price}`).join(' | ');
       return [
-        o.shopify_order_number,
-        o.customer_email,
+        isNoon ? 'Noon' : 'Shopify',
+        isNoon ? (o.noon_order_number || o.noon_order_id) : o.shopify_order_number,
+        isNoon ? o.customer_name : o.customer_email,
         o.total_price,
         o.status,
         o.odoo_order_name || o.odoo_order_id || '',
@@ -61,10 +81,12 @@ router.get('/export', async (req: AuthRequest, res) => {
 // GET /api/orders — list orders
 router.get('/', async (req: AuthRequest, res) => {
   try {
-    const { channel_id, status } = req.query;
+    const { channel_id, status, source } = req.query;
     const isAdmin = req.user!.role === 'admin';
-    const result = await query(
-      `SELECT o.*, ch.name as channel_name
+
+    // Fetch Shopify→Odoo orders
+    const shopifyOrders = (source && source !== 'shopify') ? { rows: [] } : await query(
+      `SELECT o.*, ch.name as channel_name, 'shopify' as source
        FROM orders o
        LEFT JOIN channels ch ON o.channel_id = ch.id
        ${isAdmin ? '' : 'JOIN user_clients uc ON uc.client_id = o.client_id AND uc.user_id = $3'}
@@ -75,7 +97,30 @@ router.get('/', async (req: AuthRequest, res) => {
         ? [channel_id || null, status || null]
         : [channel_id || null, status || null, req.user!.id]
     );
-    return res.json(result.rows);
+
+    // Fetch Noon orders
+    const noonOrders = (source && source !== 'noon') ? { rows: [] } : await query(
+      `SELECT no.id, no.client_id, no.channel_id, no.noon_order_id, no.noon_order_number,
+              no.status, no.total_price, no.customer_name, no.country_code,
+              no.raw_data, no.error_message, no.synced_at, no.created_at,
+              no.order_type, no.shopify_order_id, no.shopify_channel_id,
+              ch.name as channel_name, 'noon' as source
+       FROM noon_orders no
+       LEFT JOIN channels ch ON no.channel_id = ch.id
+       ${isAdmin ? '' : 'JOIN user_clients uc ON uc.client_id = no.client_id AND uc.user_id = $3'}
+       WHERE ($1::uuid IS NULL OR no.channel_id = $1::uuid)
+         AND ($2::text IS NULL OR no.status = $2::text)
+       ORDER BY no.created_at DESC`,
+      isAdmin
+        ? [channel_id || null, status || null]
+        : [channel_id || null, status || null, req.user!.id]
+    );
+
+    // Merge and sort by created_at descending
+    const all = [...shopifyOrders.rows, ...noonOrders.rows]
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+    return res.json(all);
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Failed to fetch orders' });
@@ -85,15 +130,27 @@ router.get('/', async (req: AuthRequest, res) => {
 // GET /api/orders/:id — single order with full raw_data
 router.get('/:id', async (req: AuthRequest, res) => {
   try {
+    // Try shopify orders first
     const result = await query(
-      `SELECT o.*, ch.name as channel_name, ch.shopify_store_url
+      `SELECT o.*, ch.name as channel_name, ch.shopify_store_url, 'shopify' as source
        FROM orders o
        LEFT JOIN channels ch ON o.channel_id = ch.id
        WHERE o.id = $1`,
       [req.params.id]
     );
-    if (!result.rows[0]) return res.status(404).json({ error: 'Order not found' });
-    return res.json(result.rows[0]);
+    if (result.rows[0]) return res.json(result.rows[0]);
+
+    // Try noon orders
+    const noonResult = await query(
+      `SELECT no.*, ch.name as channel_name, 'noon' as source
+       FROM noon_orders no
+       LEFT JOIN channels ch ON no.channel_id = ch.id
+       WHERE no.id = $1`,
+      [req.params.id]
+    );
+    if (noonResult.rows[0]) return res.json(noonResult.rows[0]);
+
+    return res.status(404).json({ error: 'Order not found' });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Failed to fetch order' });

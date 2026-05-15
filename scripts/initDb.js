@@ -251,6 +251,8 @@ async function init() {
         created_at TIMESTAMPTZ DEFAULT NOW(),
         UNIQUE(channel_id, amazon_order_id)
       )`,
+      // Shopify feed support
+      `ALTER TABLE feeds ADD COLUMN IF NOT EXISTS shopify_channel_id UUID REFERENCES channels(id)`,
     ];
     for (const sql of migrations) {
       await client.query(sql);

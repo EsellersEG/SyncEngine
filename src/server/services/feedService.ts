@@ -30,6 +30,7 @@ interface FeedRecord {
   odoo_search_by?: 'automatic' | 'sku' | 'ean' | 'name';
   odoo_warehouse_id?: number | null;
   odoo_warehouse_name?: string | null;
+  shopify_channel_id?: string | null;
 }
 
 function getAuthClient(serviceAccountJson?: string | null) {
@@ -92,10 +93,154 @@ export async function fetchSheetData(feed: FeedRecord): Promise<{ headers: strin
   return { headers, rows };
 }
 
+// ── Shopify Feed: fetch all products via GraphQL ────────────────────────────
+
+async function fetchShopifyProducts(feed: FeedRecord): Promise<{ headers: string[]; rows: FeedRow[] }> {
+  if (!feed.shopify_channel_id) {
+    throw new Error('Shopify feed requires a linked Shopify channel');
+  }
+
+  // Load Shopify channel credentials
+  const channelResult = await query('SELECT * FROM channels WHERE id = $1', [feed.shopify_channel_id]);
+  const channel = channelResult.rows[0];
+  if (!channel || channel.type !== 'shopify') {
+    throw new Error('Linked Shopify channel not found');
+  }
+
+  const storeDomain = channel.shopify_store_url.replace(/^https?:\/\//, '').replace(/\/$/, '');
+  const apiVersion = channel.shopify_api_version || '2024-10';
+  const url = `https://${storeDomain}/admin/api/${apiVersion}/graphql.json`;
+
+  const rows: FeedRow[] = [];
+  let cursor: string | null = null;
+  let hasNext = true;
+
+  while (hasNext) {
+    const afterClause = cursor ? `, after: "${cursor}"` : '';
+    const gql = `{
+      products(first: 50${afterClause}) {
+        edges {
+          node {
+            id title handle vendor productType status tags
+            descriptionHtml
+            images(first: 10) { edges { node { url } } }
+            variants(first: 100) {
+              edges {
+                node {
+                  id title sku barcode price compareAtPrice
+                  inventoryQuantity
+                  weight weightUnit
+                  selectedOptions { name value }
+                  image { url }
+                  inventoryItem { id requiresShipping tracked }
+                }
+              }
+            }
+          }
+          cursor
+        }
+        pageInfo { hasNextPage }
+      }
+    }`;
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': channel.shopify_access_token },
+      body: JSON.stringify({ query: gql }),
+    });
+    const json = await res.json() as {
+      data?: {
+        products: {
+          edges: Array<{
+            node: {
+              id: string; title: string; handle: string; vendor: string;
+              productType: string; status: string; tags: string[]; descriptionHtml: string;
+              images: { edges: Array<{ node: { url: string } }> };
+              variants: {
+                edges: Array<{
+                  node: {
+                    id: string; title: string; sku: string; barcode: string;
+                    price: string; compareAtPrice: string | null;
+                    inventoryQuantity: number; weight: number; weightUnit: string;
+                    selectedOptions: Array<{ name: string; value: string }>;
+                    image: { url: string } | null;
+                    inventoryItem: { id: string; requiresShipping: boolean; tracked: boolean } | null;
+                  };
+                }>;
+              };
+            };
+            cursor: string;
+          }>;
+          pageInfo: { hasNextPage: boolean };
+        };
+      };
+    };
+
+    const edges = json.data?.products?.edges || [];
+    for (const edge of edges) {
+      const product = edge.node;
+      const productImages = product.images.edges.map(e => e.node.url).join(',');
+
+      for (const variantEdge of product.variants.edges) {
+        const v = variantEdge.node;
+        const options = v.selectedOptions || [];
+
+        const row: FeedRow = {
+          'Handle': product.handle,
+          'Title': product.title,
+          'Body (HTML)': product.descriptionHtml || '',
+          'Vendor': product.vendor,
+          'Product Type': product.productType,
+          'Tags': (product.tags || []).join(', '),
+          'Published': product.status === 'ACTIVE' ? 'true' : 'false',
+          'Status': product.status,
+          'Variant SKU': v.sku || '',
+          'Variant Barcode': v.barcode || '',
+          'Variant Price': v.price || '',
+          'Variant Compare At Price': v.compareAtPrice || '',
+          'Variant Inventory Qty': v.inventoryQuantity ?? 0,
+          'Variant Grams': v.weight ? String(Math.round(v.weight * (v.weightUnit === 'KILOGRAMS' ? 1000 : 1))) : '',
+          'Variant Weight Unit': v.weightUnit || '',
+          'Variant Requires Shipping': v.inventoryItem?.requiresShipping ? 'true' : 'false',
+          'Variant Inventory Tracker': v.inventoryItem?.tracked ? 'shopify' : '',
+          'Image Src': v.image?.url || productImages,
+          'Variant Image': v.image?.url || '',
+        };
+
+        // Add option columns (Option1 Name, Option1 Value, ...)
+        options.forEach((opt, i) => {
+          row[`Option${i + 1} Name`] = opt.name;
+          row[`Option${i + 1} Value`] = opt.value;
+        });
+
+        rows.push(row);
+      }
+
+      cursor = edge.cursor;
+    }
+
+    hasNext = json.data?.products?.pageInfo?.hasNextPage || false;
+  }
+
+  // Derive headers from first row (or use default set)
+  const headers = rows.length > 0 ? Object.keys(rows[0]) : [
+    'Handle', 'Title', 'Body (HTML)', 'Vendor', 'Product Type', 'Tags',
+    'Published', 'Status', 'Variant SKU', 'Variant Barcode', 'Variant Price',
+    'Variant Compare At Price', 'Variant Inventory Qty', 'Image Src',
+  ];
+
+  console.log(`[FeedService] Shopify feed: fetched ${rows.length} variant rows`);
+  return { headers, rows };
+}
+
 export async function previewFeed(feed: FeedRecord, limit = 10) {
   if (feed.type === 'odoo') {
     const config: OdooConfig = { url: feed.odoo_url!, database: feed.odoo_database!, username: feed.odoo_username!, apiKey: feed.odoo_api_key!, productSearchBy: feed.odoo_search_by || 'automatic', warehouseId: feed.odoo_warehouse_id || undefined };
     const { headers, rows } = await fetchOdooProducts(config);
+    return { headers, rows: rows.slice(0, limit), total: rows.length };
+  }
+  if (feed.type === 'shopify') {
+    const { headers, rows } = await fetchShopifyProducts(feed);
     return { headers, rows: rows.slice(0, limit), total: rows.length };
   }
   const { headers, rows } = await fetchSheetData(feed);
@@ -132,6 +277,12 @@ export async function importFeedProducts(feed: FeedRecord) {
       headers = result.headers;
       rows = result.rows;
       skuColumn = detectOdooSkuColumn(rows, feed.odoo_search_by || 'automatic');
+    } else if (feed.type === 'shopify') {
+      // Shopify feed — fetch via GraphQL
+      const result = await fetchShopifyProducts(feed);
+      headers = result.headers;
+      rows = result.rows;
+      skuColumn = 'Variant SKU';
     } else {
       // Google Sheets feed
       const result = await fetchSheetData(feed);

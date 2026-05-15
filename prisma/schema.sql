@@ -39,7 +39,7 @@ CREATE TABLE feeds (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   client_id UUID REFERENCES clients(id) ON DELETE CASCADE,
   name VARCHAR(255) NOT NULL,
-  type VARCHAR(20) DEFAULT 'google_sheets', -- 'google_sheets', 'odoo'
+  type VARCHAR(20) DEFAULT 'google_sheets', -- 'google_sheets', 'odoo', 'shopify'
   spreadsheet_id TEXT,
   sheet_name VARCHAR(255) DEFAULT 'Sheet1',
   header_row INT DEFAULT 1,
@@ -51,6 +51,8 @@ CREATE TABLE feeds (
   odoo_api_key TEXT,
   odoo_search_by VARCHAR(20) NOT NULL DEFAULT 'automatic',
   odoo_warehouse_id INT,
+  -- Shopify specific
+  shopify_channel_id UUID REFERENCES channels(id),
   -- Scheduling
   sync_interval_minutes INT,
   last_sync_at TIMESTAMPTZ,
