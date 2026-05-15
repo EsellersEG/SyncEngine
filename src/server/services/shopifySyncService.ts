@@ -1,10 +1,12 @@
 /**
  * Shopify Sync Engine — SyncFlow
  *
- * Three execution pathways:
- *  1. Turbo Mode        → parallelBatch GraphQL mutations (price/stock/meta)
- *  2. Bulk Operations   → Shopify Bulk API via JSONL upload (large catalogs)
- *  3. Individual Mutations → parallel batched for full field syncs
+ * Execution pathways (auto-selected by product count):
+ *  1. Turbo Mode        → parallel GraphQL mutations, price/stock/meta only (≤200 products)
+ *  2. Ultra Mode        → 3-phase parallel: update existing + create new + variant groups (≤200 products)
+ *  3. Bulk Sync         → Shopify Bulk Operations API via JSONL upload, NO rate limits (>200 products)
+ *     - Up to 4 concurrent server-side bulk ops: productUpdate, variantUpdate, stock, inventoryItem
+ *     - Falls back to Turbo/Ultra if bulk operations fail
  */
 
 import { query } from '../db.js';
@@ -1768,6 +1770,473 @@ function evaluateFilterRules(rawData: Record<string, unknown>, rules: Array<{ fi
   return currentResult;
 }
 
+// ── Bulk Sync: Shopify Bulk Operations API (server-side, no rate limits) ──
+const BULK_POLL_INTERVAL_MS = 5000;
+const BULK_MAX_POLL_TIME_MS = 30 * 60 * 1000; // 30-minute max wait
+const BULK_SYNC_THRESHOLD = 200; // Use bulk ops when product count exceeds this
+
+interface BulkOpResult {
+  id: string;
+  status: string;
+  errorCode?: string | null;
+  objectCount?: string;
+  url?: string | null;
+}
+
+async function stagedUploadCreate(channel: Channel): Promise<{
+  url: string;
+  parameters: Array<{ name: string; value: string }>;
+}> {
+  const mutation = `
+    mutation {
+      stagedUploadsCreate(input: [{
+        resource: BULK_MUTATION_VARIABLES,
+        filename: "bulk_op_vars",
+        mimeType: "text/jsonl",
+        httpMethod: POST
+      }]) {
+        userErrors { field message }
+        stagedTargets {
+          url
+          resourceUrl
+          parameters { name value }
+        }
+      }
+    }`;
+
+  const result = await shopifyGraphQL(channel, mutation) as {
+    stagedUploadsCreate: {
+      userErrors: Array<{ field: string; message: string }>;
+      stagedTargets: Array<{
+        url: string;
+        resourceUrl: string;
+        parameters: Array<{ name: string; value: string }>;
+      }>;
+    };
+  };
+
+  if (result.stagedUploadsCreate.userErrors?.length > 0) {
+    throw new Error(`Staged upload error: ${result.stagedUploadsCreate.userErrors.map(e => e.message).join('; ')}`);
+  }
+
+  const target = result.stagedUploadsCreate.stagedTargets[0];
+  if (!target) throw new Error('No staged upload target returned');
+  return target;
+}
+
+async function uploadJSONL(
+  uploadTarget: { url: string; parameters: Array<{ name: string; value: string }> },
+  jsonlContent: string
+): Promise<void> {
+  const form = new FormData();
+  for (const param of uploadTarget.parameters) {
+    form.append(param.name, param.value);
+  }
+  // file must be the last field per Shopify docs
+  form.append('file', new Blob([jsonlContent], { type: 'text/jsonl' }), 'bulk_op_vars.jsonl');
+
+  const res = await fetch(uploadTarget.url, {
+    method: 'POST',
+    body: form,
+  });
+
+  if (res.status >= 400) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`JSONL upload failed (${res.status}): ${text.substring(0, 200)}`);
+  }
+}
+
+async function launchBulkOperation(
+  channel: Channel,
+  mutationString: string,
+  stagedUploadPath: string
+): Promise<string> {
+  const gql = `
+    mutation bulkRun($mutation: String!, $stagedUploadPath: String!) {
+      bulkOperationRunMutation(mutation: $mutation, stagedUploadPath: $stagedUploadPath) {
+        bulkOperation { id status }
+        userErrors { field message }
+      }
+    }`;
+
+  const result = await shopifyGraphQL(channel, gql, {
+    mutation: mutationString,
+    stagedUploadPath,
+  }) as {
+    bulkOperationRunMutation: {
+      bulkOperation?: { id: string; status: string };
+      userErrors: Array<{ field: string; message: string }>;
+    };
+  };
+
+  if (result.bulkOperationRunMutation.userErrors?.length > 0) {
+    throw new Error(`Bulk operation error: ${result.bulkOperationRunMutation.userErrors.map(e => e.message).join('; ')}`);
+  }
+
+  const opId = result.bulkOperationRunMutation.bulkOperation?.id;
+  if (!opId) throw new Error('No bulk operation ID returned');
+  return opId;
+}
+
+async function pollBulkOperation(
+  channel: Channel,
+  operationId: string,
+  label: string,
+  jobId?: string
+): Promise<BulkOpResult> {
+  const startTime = Date.now();
+
+  while (Date.now() - startTime < BULK_MAX_POLL_TIME_MS) {
+    await sleep(BULK_POLL_INTERVAL_MS);
+
+    if (jobId && await isJobCancelled(jobId)) {
+      try {
+        await shopifyGraphQL(channel,
+          `mutation cancelBulk($id: ID!) { bulkOperationCancel(id: $id) { bulkOperation { status } userErrors { message } } }`,
+          { id: operationId }
+        );
+      } catch { /* ignore cancel errors */ }
+      throw new Error(`Job cancelled during bulk ${label}`);
+    }
+
+    const pollQuery = `
+      query pollBulkOp($id: ID!) {
+        node(id: $id) {
+          ... on BulkOperation { id status errorCode objectCount url partialDataUrl }
+        }
+      }`;
+    const result = await shopifyGraphQL(channel, pollQuery, { id: operationId }) as { node: BulkOpResult };
+    const op = result.node;
+
+    if (!op || !op.status) {
+      console.warn(`[SyncFlow] Bulk ${label}: unexpected poll response, retrying...`);
+      continue;
+    }
+
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
+    console.log(`[SyncFlow] Bulk ${label}: status=${op.status} objects=${op.objectCount || 0} (${elapsed}s)`);
+
+    if (op.status === 'COMPLETED') return op;
+    if (op.status === 'FAILED') throw new Error(`Bulk ${label} FAILED: ${op.errorCode || 'unknown'}`);
+    if (op.status === 'CANCELLED') throw new Error(`Bulk ${label} was cancelled`);
+  }
+
+  throw new Error(`Bulk ${label} timed out after ${BULK_MAX_POLL_TIME_MS / 60000} min`);
+}
+
+async function executeBulkOperation(
+  channel: Channel,
+  mutationString: string,
+  jsonlLines: string[],
+  label: string,
+  jobId?: string
+): Promise<BulkOpResult> {
+  if (jsonlLines.length === 0) {
+    console.log(`[SyncFlow] Bulk ${label}: 0 items, skipping`);
+    return { id: '', status: 'COMPLETED', objectCount: '0' };
+  }
+
+  const jsonlContent = jsonlLines.join('\n');
+  const sizeKB = (jsonlContent.length / 1024).toFixed(1);
+  console.log(`[SyncFlow] Bulk ${label}: uploading ${jsonlLines.length} items (${sizeKB} KB)`);
+
+  const target = await stagedUploadCreate(channel);
+  await uploadJSONL(target, jsonlContent);
+
+  const keyParam = target.parameters.find(p => p.name === 'key');
+  if (!keyParam) throw new Error(`No 'key' parameter in staged upload for ${label}`);
+
+  const operationId = await launchBulkOperation(channel, mutationString, keyParam.value);
+  console.log(`[SyncFlow] Bulk ${label}: launched ${operationId}`);
+
+  return pollBulkOperation(channel, operationId, label, jobId);
+}
+
+async function batchLogSyncEntries(
+  jobId: string,
+  entries: Array<{ sku: string; action: string; message: string }>
+) {
+  if (entries.length === 0) return;
+  for (let i = 0; i < entries.length; i += 500) {
+    const batch = entries.slice(i, i + 500);
+    const values: unknown[] = [];
+    const placeholders: string[] = [];
+    batch.forEach((entry, idx) => {
+      const base = idx * 4;
+      placeholders.push(`($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4})`);
+      values.push(jobId, entry.sku, entry.action, entry.message);
+    });
+    await query(
+      `INSERT INTO sync_logs (job_id, sku, action, message) VALUES ${placeholders.join(', ')}`,
+      values
+    );
+  }
+}
+
+async function bulkSync(
+  channel: Channel,
+  products: ProductRow[],
+  mappings: AttributeMapping[],
+  jobId: string,
+  fullFields: boolean,
+  withImages: boolean,
+  priceAdjustmentPercent = 0,
+  priceRoundingMode: 'none' | 'up' | 'down' = 'none',
+  warehouseName?: string
+) {
+  const startTime = Date.now();
+  console.log(`[SyncFlow] ══ BULK SYNC ══ ${products.length} products | fullFields=${fullFields} | withImages=${withImages}`);
+
+  // ── Preparation ──
+  const shopifyMap = await getShopifyProductMap(channel);
+
+  let locationId = channel.settings?.stock_location_id;
+  if (!locationId) {
+    const locData = await shopifyGraphQL(channel, `{ locations(first: 1) { edges { node { id } } } }`) as {
+      locations: { edges: Array<{ node: { id: string } }> };
+    };
+    locationId = locData.locations.edges[0]?.node?.id;
+  }
+
+  const metafieldMappings = mappings.filter(m => m.target_field.startsWith('metafield:'));
+  const shopifyDefs = metafieldMappings.length > 0
+    ? await getMetafieldDefinitions(channel)
+    : new Map<string, string>();
+
+  // ── Categorize products ──
+  const groups = groupRowsByHandle(products, mappings);
+  const existingSingles: ProductRow[] = [];
+  const newSingles: ProductRow[] = [];
+  const variantGroups: GroupedProduct[] = [];
+
+  for (const group of groups) {
+    if (group.rows.length > 1) {
+      variantGroups.push(group);
+    } else {
+      if (shopifyMap.has(group.rows[0].sku)) {
+        existingSingles.push(group.rows[0]);
+      } else {
+        newSingles.push(group.rows[0]);
+      }
+    }
+  }
+
+  console.log(`[SyncFlow] Bulk split: ${existingSingles.length} existing | ${newSingles.length} new | ${variantGroups.length} variant groups`);
+
+  // ── Generate JSONL lines for each bulk operation ──
+  const productUpdateLines: string[] = [];
+  const variantUpdateLines: string[] = [];
+  const stockUpdateLines: string[] = [];
+  const inventoryItemLines: string[] = [];
+
+  for (const product of existingSingles) {
+    const ids = shopifyMap.get(product.sku)!;
+    const mapped = applyPriceAdjustment(
+      applyMappings(product.raw_data, mappings),
+      priceAdjustmentPercent,
+      priceRoundingMode
+    );
+
+    // Product-level fields
+    const productInput: Record<string, unknown> = { id: ids.productId };
+    if (fullFields) {
+      if (mapped.title) productInput.title = mapped.title;
+      if (mapped.body_html) productInput.descriptionHtml = mapped.body_html;
+      if (mapped.tags) productInput.tags = String(mapped.tags).split(',').map((t: string) => t.trim());
+      if (mapped.vendor) productInput.vendor = mapped.vendor;
+      if (mapped.product_type) productInput.productType = mapped.product_type;
+      if (mapped.status) productInput.status = String(mapped.status).toUpperCase();
+    }
+    const metafields = metafieldMappings.length > 0
+      ? buildMetafields(product.raw_data, metafieldMappings, shopifyDefs)
+      : [];
+    if (metafields.length > 0) productInput.metafields = metafields;
+
+    if (Object.keys(productInput).length > 1) {
+      productUpdateLines.push(JSON.stringify({ input: productInput }));
+    }
+
+    // Variant-level fields (price, barcode, etc.)
+    const variantInput: Record<string, unknown> = { id: ids.variantId };
+    if (mapped.price) variantInput.price = String(mapped.price);
+    if (mapped.compare_at_price) variantInput.compareAtPrice = String(mapped.compare_at_price);
+    if (fullFields) {
+      if (mapped.barcode) variantInput.barcode = String(mapped.barcode);
+      if (mapped.variant_requires_shipping !== undefined) {
+        variantInput.inventoryItem = { requiresShipping: isTruthyValue(mapped.variant_requires_shipping) };
+      }
+      if (mapped.variant_inventory_policy) {
+        variantInput.inventoryPolicy = String(mapped.variant_inventory_policy).toUpperCase();
+      }
+    }
+    if (Object.keys(variantInput).length > 1) {
+      variantUpdateLines.push(JSON.stringify({ productId: ids.productId, variants: [variantInput] }));
+    }
+
+    // Stock quantity
+    const stockQty = mapped.inventory_quantity != null
+      ? parseInt(String(mapped.inventory_quantity))
+      : NaN;
+    if (!isNaN(stockQty) && locationId) {
+      stockUpdateLines.push(JSON.stringify({
+        input: {
+          name: 'available',
+          reason: 'correction',
+          ignoreCompareQuantity: true,
+          quantities: [{ inventoryItemId: ids.inventoryItemId, locationId, quantity: stockQty }],
+        },
+      }));
+    }
+
+    // Inventory item (tracking + weight)
+    const invInput: Record<string, unknown> = {};
+    if (mapped.inventory_quantity !== undefined) invInput.tracked = true;
+    const weight = parseMappedWeight(mapped);
+    if (weight) invInput.measurement = { weight };
+    if (Object.keys(invInput).length > 0) {
+      inventoryItemLines.push(JSON.stringify({ id: ids.inventoryItemId, input: invInput }));
+    }
+  }
+
+  const genMs = Date.now() - startTime;
+  console.log(
+    `[SyncFlow] JSONL generated in ${genMs}ms: ` +
+    `productUpdate=${productUpdateLines.length} variantUpdate=${variantUpdateLines.length} ` +
+    `stock=${stockUpdateLines.length} invItem=${inventoryItemLines.length}`
+  );
+
+  if (await isJobCancelled(jobId)) return;
+
+  // ── Launch concurrent bulk operations ──
+  const bulkPromises: Array<Promise<BulkOpResult>> = [];
+  const bulkLabels: string[] = [];
+
+  if (productUpdateLines.length > 0) {
+    bulkLabels.push('productUpdate');
+    bulkPromises.push(executeBulkOperation(
+      channel,
+      'mutation call($input: ProductInput!) { productUpdate(input: $input) { product { id } userErrors { field message } } }',
+      productUpdateLines,
+      'productUpdate',
+      jobId
+    ));
+  }
+
+  if (variantUpdateLines.length > 0) {
+    bulkLabels.push('variantUpdate');
+    bulkPromises.push(executeBulkOperation(
+      channel,
+      'mutation call($productId: ID!, $variants: [ProductVariantsBulkInput!]!) { productVariantsBulkUpdate(productId: $productId, variants: $variants) { productVariants { id } userErrors { field message } } }',
+      variantUpdateLines,
+      'variantUpdate',
+      jobId
+    ));
+  }
+
+  if (stockUpdateLines.length > 0) {
+    bulkLabels.push('stockUpdate');
+    bulkPromises.push(executeBulkOperation(
+      channel,
+      'mutation call($input: InventorySetQuantitiesInput!) { inventorySetQuantities(input: $input) { inventoryAdjustmentGroup { reason } userErrors { field message } } }',
+      stockUpdateLines,
+      'stockUpdate',
+      jobId
+    ));
+  }
+
+  if (inventoryItemLines.length > 0) {
+    bulkLabels.push('inventoryItem');
+    bulkPromises.push(executeBulkOperation(
+      channel,
+      'mutation call($id: ID!, $input: InventoryItemInput!) { inventoryItemUpdate(id: $id, input: $input) { inventoryItem { id } userErrors { field message } } }',
+      inventoryItemLines,
+      'inventoryItem',
+      jobId
+    ));
+  }
+
+  if (bulkPromises.length > 0) {
+    console.log(`[SyncFlow] Waiting for ${bulkPromises.length} concurrent bulk ops: [${bulkLabels.join(', ')}]`);
+    const bulkResults = await Promise.all(bulkPromises);
+    for (let i = 0; i < bulkResults.length; i++) {
+      console.log(`[SyncFlow] Bulk ${bulkLabels[i]} done: objects=${bulkResults[i].objectCount}`);
+    }
+  }
+
+  const bulkMs = Date.now() - startTime;
+  console.log(`[SyncFlow] Bulk operations completed in ${(bulkMs / 1000).toFixed(1)}s`);
+
+  await query(
+    'UPDATE sync_jobs SET processed_count = $1, updated_count = $2 WHERE id = $3',
+    [existingSingles.length, existingSingles.length, jobId]
+  );
+
+  // Batch log all existing products (one DB call per 500 instead of per product)
+  await batchLogSyncEntries(jobId, existingSingles.map(p => ({
+    sku: p.sku,
+    action: 'updated',
+    message: 'Bulk sync',
+  })));
+
+  // ── Post-bulk: handle new products and variant groups (small numbers, regular API) ──
+  let processedCount = existingSingles.length;
+
+  if (newSingles.length > 0 && !await isJobCancelled(jobId)) {
+    console.log(`[SyncFlow] Bulk post: creating ${newSingles.length} new products`);
+    for (let i = 0; i < newSingles.length; i += CREATE_PARALLEL_SIZE) {
+      if (await isJobCancelled(jobId)) return;
+      const batch = newSingles.slice(i, i + CREATE_PARALLEL_SIZE);
+      let created = 0, failed = 0;
+      await Promise.all(batch.map(async (product) => {
+        try {
+          const mapped = applyPriceAdjustment(applyMappings(product.raw_data, mappings), priceAdjustmentPercent, priceRoundingMode);
+          await createShopifyProduct(channel, product.sku, mapped, withImages, mappings, product.raw_data, shopifyDefs);
+          await logSyncEntry(jobId, product.sku, 'created', 'New product created');
+          created++;
+        } catch (err) {
+          await logSyncEntry(jobId, product.sku, 'failed', String(err));
+          failed++;
+        }
+      }));
+      processedCount += batch.length;
+      await query(
+        'UPDATE sync_jobs SET processed_count = $1, created_count = created_count + $2, failed_count = failed_count + $3 WHERE id = $4',
+        [processedCount, created, failed, jobId]
+      );
+    }
+  }
+
+  if (variantGroups.length > 0 && !await isJobCancelled(jobId)) {
+    console.log(`[SyncFlow] Bulk post: syncing ${variantGroups.length} variant groups`);
+    for (let i = 0; i < variantGroups.length; i += VARIANT_PARALLEL_SIZE) {
+      if (await isJobCancelled(jobId)) return;
+      const batch = variantGroups.slice(i, i + VARIANT_PARALLEL_SIZE);
+      let updated = 0, failed = 0;
+      await Promise.all(batch.map(async (group) => {
+        try {
+          validateVariantSKUs(group.rows);
+          await syncVariantGroup(channel, group, mappings, metafieldMappings, withImages, shopifyMap, locationId, priceAdjustmentPercent, priceRoundingMode, shopifyDefs);
+          await logSyncEntry(jobId, group.rows[0].sku, 'updated', `Variant group synced (${group.rows.length} variants)`);
+          updated += group.rows.length;
+        } catch (err) {
+          for (const row of group.rows) {
+            await logSyncEntry(jobId, row.sku, 'failed', String(err));
+          }
+          failed += group.rows.length;
+        }
+      }));
+      processedCount += batch.reduce((sum, g) => sum + g.rows.length, 0);
+      await query(
+        'UPDATE sync_jobs SET processed_count = $1, updated_count = updated_count + $2, failed_count = failed_count + $3 WHERE id = $4',
+        [processedCount, updated, failed, jobId]
+      );
+    }
+  }
+
+  const totalSec = ((Date.now() - startTime) / 1000).toFixed(1);
+  console.log(`[SyncFlow] ══ BULK SYNC DONE ══ ${totalSec}s | ${existingSingles.length} updated | ${newSingles.length} new | ${variantGroups.length} groups`);
+}
+
 // ── Main Entry Point ───────────────────────────────────────────────────────
 export async function runSyncJob(config: SyncJobConfig) {
   const {
@@ -1820,11 +2289,31 @@ export async function runSyncJob(config: SyncJobConfig) {
     console.log(`[SyncFlow] Job ${jobId} | Preset: ${preset} | Products: ${products.length}`);
 
     if (preset === 'price_stock_meta' || (config.fields && config.fields.every(f => ['price', 'stock', 'metafields'].includes(f)))) {
-      console.log('[SyncFlow] Pathway: TURBO');
-      await turboSync(channel, products, mappings, jobId, priceAdjustmentPercent, priceRoundingMode, warehouseName);
+      if (products.length > BULK_SYNC_THRESHOLD) {
+        console.log(`[SyncFlow] Pathway: BULK TURBO (${products.length} products)`);
+        try {
+          await bulkSync(channel, products, mappings, jobId, false, false, priceAdjustmentPercent, priceRoundingMode, warehouseName);
+        } catch (bulkErr) {
+          console.error('[SyncFlow] Bulk sync failed, falling back to turbo:', bulkErr);
+          await turboSync(channel, products, mappings, jobId, priceAdjustmentPercent, priceRoundingMode, warehouseName);
+        }
+      } else {
+        console.log('[SyncFlow] Pathway: TURBO');
+        await turboSync(channel, products, mappings, jobId, priceAdjustmentPercent, priceRoundingMode, warehouseName);
+      }
     } else {
-      console.log(`[SyncFlow] Pathway: ULTRA (${preset})`);
-      await ultraSync(channel, products, mappings, jobId, preset === 'sync_all', priceAdjustmentPercent, priceRoundingMode, warehouseName);
+      if (products.length > BULK_SYNC_THRESHOLD) {
+        console.log(`[SyncFlow] Pathway: BULK ULTRA (${products.length} products, ${preset})`);
+        try {
+          await bulkSync(channel, products, mappings, jobId, true, preset === 'sync_all', priceAdjustmentPercent, priceRoundingMode, warehouseName);
+        } catch (bulkErr) {
+          console.error('[SyncFlow] Bulk sync failed, falling back to ultra:', bulkErr);
+          await ultraSync(channel, products, mappings, jobId, preset === 'sync_all', priceAdjustmentPercent, priceRoundingMode, warehouseName);
+        }
+      } else {
+        console.log(`[SyncFlow] Pathway: ULTRA (${preset})`);
+        await ultraSync(channel, products, mappings, jobId, preset === 'sync_all', priceAdjustmentPercent, priceRoundingMode, warehouseName);
+      }
     }
 
     // Don't mark complete if cancelled
