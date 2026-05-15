@@ -258,6 +258,30 @@ function isValidImageUrl(url: string): boolean {
   }
 }
 
+// Transform Google Drive URLs to direct image format that Shopify can fetch server-side
+function toDirectImageUrl(url: string): string {
+  // https://drive.google.com/file/d/FILE_ID/view?usp=sharing
+  const driveFileMatch = url.match(/drive\.google\.com\/file\/d\/([^/?]+)/);
+  if (driveFileMatch) {
+    return `https://lh3.googleusercontent.com/d/${driveFileMatch[1]}=s0`;
+  }
+  // https://drive.google.com/open?id=FILE_ID
+  const driveOpenMatch = url.match(/drive\.google\.com\/open\?id=([^&]+)/);
+  if (driveOpenMatch) {
+    return `https://lh3.googleusercontent.com/d/${driveOpenMatch[1]}=s0`;
+  }
+  // https://drive.google.com/uc?id=FILE_ID or uc?export=download&id=FILE_ID
+  const driveUcMatch = url.match(/drive\.google\.com\/uc\?.*id=([^&]+)/);
+  if (driveUcMatch) {
+    return `https://lh3.googleusercontent.com/d/${driveUcMatch[1]}=s0`;
+  }
+  // https://lh3.googleusercontent.com/d/FILE_ID (add =s0 if missing)
+  if (url.includes('lh3.googleusercontent.com/d/') && !url.includes('=s')) {
+    return url.replace(/\/?$/, '') + '=s0';
+  }
+  return url;
+}
+
 async function updateInventoryItemDetails(
   channel: Channel,
   inventoryItemId: string,
@@ -728,7 +752,7 @@ async function syncProductTurbo(
     if (withImages) {
       const imageSource = mapped.variant_image || mapped.image_url;
       if (imageSource) {
-        const urls = String(imageSource).split(',').map(u => u.trim()).filter(isValidImageUrl);
+        const urls = String(imageSource).split(',').map(u => u.trim()).filter(isValidImageUrl).map(toDirectImageUrl);
         if (urls.length > 0) {
           promises.push(
             deleteExistingProductMedia(channel, shopifyIds.productId).then(() =>
@@ -1113,7 +1137,7 @@ async function syncGroupedProduct(
 
         const updateImageSource = mapped.variant_image || mapped.image_url;
         if (withImages && updateImageSource) {
-          const urls = String(updateImageSource).split(',').map(u => u.trim()).filter(isValidImageUrl);
+          const urls = String(updateImageSource).split(',').map(u => u.trim()).filter(isValidImageUrl).map(toDirectImageUrl);
           if (urls.length > 0) {
             // Delete existing images first, then upload new ones
             await deleteExistingProductMedia(channel, shopifyIds.productId);
@@ -1180,7 +1204,7 @@ async function createShopifyProduct(channel: Channel, sku: string, mapped: Recor
   const media: Array<{ originalSource: string; mediaContentType: string }> = [];
   const createImageSource = mapped.variant_image || mapped.image_url;
   if (withImages && createImageSource) {
-    const urls = String(createImageSource).split(',').map(u => u.trim()).filter(isValidImageUrl);
+    const urls = String(createImageSource).split(',').map(u => u.trim()).filter(isValidImageUrl).map(toDirectImageUrl);
     for (const url of urls) {
       media.push({ originalSource: url, mediaContentType: 'IMAGE' });
     }
@@ -1451,7 +1475,7 @@ async function syncVariantGroup(
   const fileMap = new Map<string, { originalSource: string; contentType: string }>();
   if (withImages) {
     for (const entry of mappedRows) {
-      const urls = String(entry.mapped.image_url || '').split(',').map(url => url.trim()).filter(isValidImageUrl);
+      const urls = String(entry.mapped.image_url || '').split(',').map(url => url.trim()).filter(isValidImageUrl).map(toDirectImageUrl);
       for (const url of urls) {
         if (!fileMap.has(url)) fileMap.set(url, { originalSource: url, contentType: 'IMAGE' });
       }
