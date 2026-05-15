@@ -145,6 +145,7 @@ router.post('/start', async (req: AuthRequest, res) => {
         preset: effectivePreset,
         fields,
         filterRules: filter_rules,
+        includeImages: !!include_images,
         priceAdjustmentPercent,
         priceRoundingMode,
         warehouseName: resolvedWarehouseName,

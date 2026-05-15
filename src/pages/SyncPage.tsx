@@ -136,9 +136,9 @@ export default function SyncPage() {
       const body: Record<string, unknown> = { ...config };
       if (config.preset === 'custom') body.fields = customFields;
       if (filterRules.length > 0) body.filter_rules = filterRules;
-      // Include images toggle for Amazon
+      // Include images toggle for Shopify and Amazon
       const selectedCh = channels.find(ch => ch.id === config.channel_id);
-      if (selectedCh?.type === 'amazon' && includeImages) body.include_images = true;
+      if ((selectedCh?.type === 'amazon' || selectedCh?.type === 'shopify') && includeImages) body.include_images = true;
       await api.post('/sync/start', body);
       const updated = await api.get('/sync/jobs?limit=50') as SyncJob[];
       setJobs(updated);
@@ -675,10 +675,12 @@ export default function SyncPage() {
               </button>
             )}
 
-            {/* Include Images Toggle (Amazon only) */}
+            {/* Include Images Toggle (Amazon & Shopify custom sync) */}
             {(() => {
               const selectedCh = channels.find(ch => ch.id === config.channel_id);
-              return selectedCh?.type === 'amazon' && (config.preset === 'sync_all' || config.preset === 'content_only' || config.preset === 'price_stock_meta') ? (
+              const showForAmazon = selectedCh?.type === 'amazon' && (config.preset === 'sync_all' || config.preset === 'content_only' || config.preset === 'price_stock_meta');
+              const showForShopify = selectedCh?.type === 'shopify' && config.preset === 'custom';
+              return (showForAmazon || showForShopify) ? (
                 <label style={{
                   display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderRadius: 10,
                   border: `1px solid ${includeImages ? 'rgba(255,153,0,0.4)' : 'rgba(79,110,247,0.1)'}`,

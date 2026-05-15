@@ -28,6 +28,7 @@ interface SyncJobConfig {
   fields?: string[];
   filterRules?: Array<{ field: string; operator: string; value: string; logic?: string }>;
   skus?: string[]; // If provided, only sync these SKUs
+  includeImages?: boolean;
   priceAdjustmentPercent?: number;
   priceRoundingMode?: 'none' | 'up' | 'down';
   warehouseName?: string;
@@ -1539,7 +1540,7 @@ async function syncVariantGroup(
       }
 
       const variantImageSource = entry.mapped.variant_image || entry.mapped.image_url;
-      const variantImage = withImages ? String(variantImageSource || '').split(',').map(url => url.trim()).find(Boolean) : null;
+      const variantImage = withImages ? String(variantImageSource || '').split(',').map(url => url.trim()).filter(isValidImageUrl).map(toDirectImageUrl).find(Boolean) : null;
       if (variantImage) {
         variant.file = { originalSource: variantImage, contentType: 'IMAGE' };
       }
@@ -2315,7 +2316,10 @@ export async function runSyncJob(config: SyncJobConfig) {
     );
     const mappings: AttributeMapping[] = mappingsResult.rows;
 
-    console.log(`[SyncFlow] Job ${jobId} | Preset: ${preset} | Products: ${products.length}`);
+    // Determine if images should be synced: sync_all always includes images, custom uses includeImages flag
+    const withImages = preset === 'sync_all' || !!config.includeImages;
+
+    console.log(`[SyncFlow] Job ${jobId} | Preset: ${preset} | Products: ${products.length} | Images: ${withImages}`);
 
     if (preset === 'price_stock_meta' || (config.fields && config.fields.every(f => ['price', 'stock', 'metafields'].includes(f)))) {
       if (products.length > BULK_SYNC_THRESHOLD) {
@@ -2334,14 +2338,14 @@ export async function runSyncJob(config: SyncJobConfig) {
       if (products.length > BULK_SYNC_THRESHOLD) {
         console.log(`[SyncFlow] Pathway: BULK ULTRA (${products.length} products, ${preset})`);
         try {
-          await bulkSync(channel, products, mappings, jobId, true, preset === 'sync_all', priceAdjustmentPercent, priceRoundingMode, warehouseName);
+          await bulkSync(channel, products, mappings, jobId, true, withImages, priceAdjustmentPercent, priceRoundingMode, warehouseName);
         } catch (bulkErr) {
           console.error('[SyncFlow] Bulk sync failed, falling back to ultra:', bulkErr);
-          await ultraSync(channel, products, mappings, jobId, preset === 'sync_all', priceAdjustmentPercent, priceRoundingMode, warehouseName);
+          await ultraSync(channel, products, mappings, jobId, withImages, priceAdjustmentPercent, priceRoundingMode, warehouseName);
         }
       } else {
         console.log(`[SyncFlow] Pathway: ULTRA (${preset})`);
-        await ultraSync(channel, products, mappings, jobId, preset === 'sync_all', priceAdjustmentPercent, priceRoundingMode, warehouseName);
+        await ultraSync(channel, products, mappings, jobId, withImages, priceAdjustmentPercent, priceRoundingMode, warehouseName);
       }
     }
 
