@@ -67,7 +67,7 @@ async function isJobCancelled(jobId: string): Promise<boolean> {
 // ── Main sync runner ───────────────────────────────────────────────────────
 
 export async function runNoonSyncJob(config: NoonSyncJobConfig): Promise<void> {
-  const { jobId, channel, feedId, preset, priceAdjustmentPercent = 0, priceRoundingMode = 'none' } = config;
+  const { jobId, channel, feedId, preset, fields, priceAdjustmentPercent = 0, priceRoundingMode = 'none' } = config;
   const startTime = Date.now();
 
   console.log(`[NoonSync] Starting job ${jobId} — preset: ${preset}`);
@@ -128,8 +128,13 @@ export async function runNoonSyncJob(config: NoonSyncJobConfig): Promise<void> {
     let skippedCount = 0;
 
     // Determine which fields to sync
-    const syncStock = preset === 'price_stock' || preset === 'stock_only' || preset === 'sync_all';
-    const syncPrice = preset === 'price_stock' || preset === 'price_only' || preset === 'sync_all';
+    const customFields = fields || [];
+    const syncStock = preset === 'price_stock' || preset === 'stock_only' || preset === 'sync_all'
+      || preset === 'price_stock_meta'
+      || (preset === 'custom' && customFields.includes('stock'));
+    const syncPrice = preset === 'price_stock' || preset === 'price_only' || preset === 'sync_all'
+      || preset === 'price_stock_meta'
+      || (preset === 'custom' && customFields.includes('price'));
 
     // Process in batches
     for (let i = 0; i < products.length; i += BATCH_SIZE) {
