@@ -203,6 +203,62 @@ async function syncOrderToOdoo(channel: ChannelInfo, shopifyOrderId: string, ord
   }
 }
 
+// POST /webhooks/shopify/orders/fulfilled — Shopify order fulfilled webhook
+// When a Shopify order is fulfilled with a tracking number, push shipment to Noon
+router.post('/shopify/orders/fulfilled', async (req: Request, res: Response) => {
+  const hmac = req.headers['x-shopify-hmac-sha256'] as string;
+  const shopDomain = (req.headers['x-shopify-shop-domain'] as string || '').trim().toLowerCase();
+
+  res.status(200).json({ received: true });
+
+  try {
+    const channelResult = await query(
+      "SELECT c.* FROM channels c WHERE LOWER(TRIM(REPLACE(REPLACE(c.shopify_store_url, 'https://', ''), 'http://', ''))) = $1 AND c.type = 'shopify'",
+      [shopDomain]
+    );
+    const channel = channelResult.rows[0];
+    if (!channel) {
+      console.warn(`[Webhook] Fulfillment: no channel found for shop: ${shopDomain}`);
+      return;
+    }
+
+    if (channel.settings?.webhook_secret && hmac) {
+      const rawBody = (req as unknown as Record<string, unknown>).rawBody as string || JSON.stringify(req.body);
+      if (!verifyShopifyHmac(rawBody, hmac, channel.settings.webhook_secret)) {
+        console.warn(`[Webhook] Fulfillment: HMAC verification failed for shop: ${shopDomain}`);
+        return;
+      }
+    }
+
+    const order = req.body;
+    const shopifyOrderId = String(order.id);
+    const fulfillments = (order.fulfillments || []) as Array<Record<string, unknown>>;
+
+    // Get tracking from the latest fulfillment
+    const latestFulfillment = fulfillments[fulfillments.length - 1];
+    if (!latestFulfillment) {
+      console.log(`[Webhook] Fulfillment: no fulfillment data in order ${order.name}`);
+      return;
+    }
+
+    const trackingNumber = String(latestFulfillment.tracking_number || '');
+    const trackingCompany = String(latestFulfillment.tracking_company || '');
+
+    if (!trackingNumber) {
+      console.log(`[Webhook] Fulfillment: no tracking number for order ${order.name}`);
+      return;
+    }
+
+    console.log(`[Webhook] Fulfillment: order ${order.name} fulfilled with tracking ${trackingNumber}`);
+
+    // Push to Noon
+    const { fulfillNoonOrderFromShopify } = await import('../services/noonOrderSyncService.js');
+    await fulfillNoonOrderFromShopify(shopifyOrderId, channel.id, trackingNumber, trackingCompany);
+  } catch (err) {
+    console.error('[Webhook] Error processing fulfillment:', err);
+  }
+});
+
 // POST /webhooks/shopify/orders/cancelled — Shopify order cancelled webhook
 router.post('/shopify/orders/cancelled', async (req: Request, res: Response) => {
   const hmac = req.headers['x-shopify-hmac-sha256'] as string;

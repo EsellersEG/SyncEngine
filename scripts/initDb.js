@@ -229,6 +229,9 @@ async function init() {
       // Noon orders: add order_type column
       `ALTER TABLE noon_orders ADD COLUMN IF NOT EXISTS order_type VARCHAR(10) DEFAULT 'fbp'`,
       `CREATE INDEX IF NOT EXISTS idx_noon_orders_type ON noon_orders(order_type)`,
+      // Noon orders: link to Shopify
+      `ALTER TABLE noon_orders ADD COLUMN IF NOT EXISTS shopify_order_id TEXT`,
+      `ALTER TABLE noon_orders ADD COLUMN IF NOT EXISTS shopify_channel_id UUID`,
       `CREATE TABLE IF NOT EXISTS amazon_orders (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         client_id UUID REFERENCES clients(id) ON DELETE CASCADE,

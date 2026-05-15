@@ -261,4 +261,22 @@ router.post('/orders/fetch', async (req: AuthRequest, res) => {
   }
 });
 
+// POST /api/noon/orders/sync-to-shopify — push Noon orders to Shopify
+// body: { noon_channel_id, shopify_channel_id, order_type: 'fbn' | 'fbp' | 'both' }
+router.post('/orders/sync-to-shopify', async (req: AuthRequest, res) => {
+  try {
+    const { noon_channel_id, shopify_channel_id, order_type = 'both' } = req.body;
+    if (!noon_channel_id || !shopify_channel_id) {
+      return res.status(400).json({ error: 'noon_channel_id and shopify_channel_id required' });
+    }
+
+    const { syncNoonOrdersToShopify } = await import('../services/noonOrderSyncService.js');
+    const result = await syncNoonOrdersToShopify(noon_channel_id, shopify_channel_id, order_type);
+    return res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('Noon order sync to Shopify failed:', err);
+    return res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to sync orders' });
+  }
+});
+
 export default router;
