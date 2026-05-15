@@ -85,7 +85,7 @@ export default function OrdersPage() {
 
   async function handleExportCSV() {
     try {
-      const token = localStorage.getItem('token');
+      const token = localStorage.getItem('sync_engine_token');
       const res = await fetch('/api/orders/export', {
         headers: { Authorization: `Bearer ${token}` },
       });

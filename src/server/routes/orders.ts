@@ -61,20 +61,19 @@ router.get('/export', async (req: AuthRequest, res) => {
 // GET /api/orders — list orders
 router.get('/', async (req: AuthRequest, res) => {
   try {
-    const { channel_id, status, limit = '100' } = req.query;
+    const { channel_id, status } = req.query;
     const isAdmin = req.user!.role === 'admin';
     const result = await query(
       `SELECT o.*, ch.name as channel_name
        FROM orders o
        LEFT JOIN channels ch ON o.channel_id = ch.id
-       ${isAdmin ? '' : 'JOIN user_clients uc ON uc.client_id = o.client_id AND uc.user_id = $4'}
+       ${isAdmin ? '' : 'JOIN user_clients uc ON uc.client_id = o.client_id AND uc.user_id = $3'}
        WHERE ($1::uuid IS NULL OR o.channel_id = $1::uuid)
          AND ($2::text IS NULL OR o.status = $2::text)
-       ORDER BY o.created_at DESC
-       LIMIT $3`,
+       ORDER BY o.created_at DESC`,
       isAdmin
-        ? [channel_id || null, status || null, parseInt(limit as string)]
-        : [channel_id || null, status || null, parseInt(limit as string), req.user!.id]
+        ? [channel_id || null, status || null]
+        : [channel_id || null, status || null, req.user!.id]
     );
     return res.json(result.rows);
   } catch (err) {
