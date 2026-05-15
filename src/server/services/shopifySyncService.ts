@@ -5,7 +5,8 @@
  *  1. Turbo Mode        → parallel GraphQL mutations, price/stock/meta only (≤200 products)
  *  2. Ultra Mode        → 3-phase parallel: update existing + create new + variant groups (≤200 products)
  *  3. Bulk Sync         → Shopify Bulk Operations API via JSONL upload, NO rate limits (>200 products)
- *     - Up to 4 concurrent server-side bulk ops: productUpdate, variantUpdate, stock, inventoryItem
+ *     - Uses productSet mutation: product + variant + price + stock ALL in one JSONL line per product
+ *     - 2 sequential bulk ops: productSet (main) + inventoryItemUpdate (tracking/weight)
  *     - Falls back to Turbo/Ultra if bulk operations fail
  */
 
@@ -58,8 +59,8 @@ interface SyncLogDetails {
 
 const TURBO_BATCH_SIZE = 40; // Ultra turbo parallel batch
 const IMAGE_TURBO_BATCH_SIZE = 15; // Turbo with images (more API calls per product)
-const CREATE_PARALLEL_SIZE = 10; // Parallel product creation
-const VARIANT_PARALLEL_SIZE = 12; // Variant group parallel processing
+const CREATE_PARALLEL_SIZE = 20; // Parallel product creation
+const VARIANT_PARALLEL_SIZE = 20; // Variant group parallel processing
 const MAX_RETRIES = 8;
 const RETRY_DELAY_MS = 2000;
 
@@ -1840,10 +1841,12 @@ async function uploadJSONL(
     body: form,
   });
 
-  if (res.status >= 400) {
+  // GCS returns 201 (via success_action_status param); accept any 2xx
+  if (res.status < 200 || res.status >= 300) {
     const text = await res.text().catch(() => '');
-    throw new Error(`JSONL upload failed (${res.status}): ${text.substring(0, 200)}`);
+    throw new Error(`JSONL upload failed (${res.status}): ${text.substring(0, 500)}`);
   }
+  console.log(`[SyncFlow] JSONL upload OK (${res.status})`);
 }
 
 async function launchBulkOperation(
@@ -2023,10 +2026,8 @@ async function bulkSync(
 
   console.log(`[SyncFlow] Bulk split: ${existingSingles.length} existing | ${newSingles.length} new | ${variantGroups.length} variant groups`);
 
-  // ── Generate JSONL lines for each bulk operation ──
-  const productUpdateLines: string[] = [];
-  const variantUpdateLines: string[] = [];
-  const stockUpdateLines: string[] = [];
+  // ── Generate JSONL: productSet combines product + variant + stock in ONE mutation ──
+  const productSetLines: string[] = [];
   const inventoryItemLines: string[] = [];
 
   for (const product of existingSingles) {
@@ -2037,58 +2038,60 @@ async function bulkSync(
       priceRoundingMode
     );
 
+    // Build productSet input (one call = product fields + variant + stock)
+    const psInput: Record<string, unknown> = {
+      id: ids.productId,
+    };
+
     // Product-level fields
-    const productInput: Record<string, unknown> = { id: ids.productId };
     if (fullFields) {
-      if (mapped.title) productInput.title = mapped.title;
-      if (mapped.body_html) productInput.descriptionHtml = mapped.body_html;
-      if (mapped.tags) productInput.tags = String(mapped.tags).split(',').map((t: string) => t.trim());
-      if (mapped.vendor) productInput.vendor = mapped.vendor;
-      if (mapped.product_type) productInput.productType = mapped.product_type;
-      if (mapped.status) productInput.status = String(mapped.status).toUpperCase();
+      if (mapped.title) psInput.title = mapped.title;
+      if (mapped.body_html) psInput.descriptionHtml = mapped.body_html;
+      if (mapped.tags) psInput.tags = String(mapped.tags).split(',').map((t: string) => t.trim());
+      if (mapped.vendor) psInput.vendor = mapped.vendor;
+      if (mapped.product_type) psInput.productType = mapped.product_type;
+      if (mapped.status) psInput.status = String(mapped.status).toUpperCase();
     }
+
+    // Metafields
     const metafields = metafieldMappings.length > 0
       ? buildMetafields(product.raw_data, metafieldMappings, shopifyDefs)
       : [];
-    if (metafields.length > 0) productInput.metafields = metafields;
+    if (metafields.length > 0) psInput.metafields = metafields;
 
-    if (Object.keys(productInput).length > 1) {
-      productUpdateLines.push(JSON.stringify({ input: productInput }));
-    }
-
-    // Variant-level fields (price, barcode, etc.)
-    const variantInput: Record<string, unknown> = { id: ids.variantId };
-    if (mapped.price) variantInput.price = String(mapped.price);
-    if (mapped.compare_at_price) variantInput.compareAtPrice = String(mapped.compare_at_price);
+    // Variant (price + barcode + stock in one)
+    const variant: Record<string, unknown> = {
+      id: ids.variantId,
+      sku: product.sku,
+    };
+    if (mapped.price) variant.price = String(mapped.price);
+    if (mapped.compare_at_price) variant.compareAtPrice = String(mapped.compare_at_price);
     if (fullFields) {
-      if (mapped.barcode) variantInput.barcode = String(mapped.barcode);
+      if (mapped.barcode) variant.barcode = String(mapped.barcode);
       if (mapped.variant_requires_shipping !== undefined) {
-        variantInput.inventoryItem = { requiresShipping: isTruthyValue(mapped.variant_requires_shipping) };
+        variant.inventoryItem = { requiresShipping: isTruthyValue(mapped.variant_requires_shipping) };
       }
       if (mapped.variant_inventory_policy) {
-        variantInput.inventoryPolicy = String(mapped.variant_inventory_policy).toUpperCase();
+        variant.inventoryPolicy = String(mapped.variant_inventory_policy).toUpperCase();
       }
     }
-    if (Object.keys(variantInput).length > 1) {
-      variantUpdateLines.push(JSON.stringify({ productId: ids.productId, variants: [variantInput] }));
-    }
 
-    // Stock quantity
+    // Stock quantity embedded in variant
     const stockQty = mapped.inventory_quantity != null
       ? parseInt(String(mapped.inventory_quantity))
       : NaN;
     if (!isNaN(stockQty) && locationId) {
-      stockUpdateLines.push(JSON.stringify({
-        input: {
-          name: 'available',
-          reason: 'correction',
-          ignoreCompareQuantity: true,
-          quantities: [{ inventoryItemId: ids.inventoryItemId, locationId, quantity: stockQty }],
-        },
-      }));
+      variant.inventoryQuantities = [{
+        locationId,
+        name: 'available',
+        quantity: stockQty,
+      }];
     }
 
-    // Inventory item (tracking + weight)
+    psInput.variants = [variant];
+    productSetLines.push(JSON.stringify({ input: psInput, synchronous: false }));
+
+    // Inventory item details (tracking + weight) — separate bulk op
     const invInput: Record<string, unknown> = {};
     if (mapped.inventory_quantity !== undefined) invInput.tracked = true;
     const weight = parseMappedWeight(mapped);
@@ -2100,85 +2103,77 @@ async function bulkSync(
 
   const genMs = Date.now() - startTime;
   console.log(
-    `[SyncFlow] JSONL generated in ${genMs}ms: ` +
-    `productUpdate=${productUpdateLines.length} variantUpdate=${variantUpdateLines.length} ` +
-    `stock=${stockUpdateLines.length} invItem=${inventoryItemLines.length}`
+    `[SyncFlow] JSONL generated in ${genMs}ms: productSet=${productSetLines.length} invItem=${inventoryItemLines.length}`
   );
 
   if (await isJobCancelled(jobId)) return;
 
-  // ── Launch concurrent bulk operations ──
-  const bulkPromises: Array<Promise<BulkOpResult>> = [];
-  const bulkLabels: string[] = [];
+  // ── Run bulk operations SEQUENTIALLY (API 2024-10 allows only 1 at a time) ──
+  let bulkSuccess = 0;
+  let bulkFail = 0;
 
-  if (productUpdateLines.length > 0) {
-    bulkLabels.push('productUpdate');
-    bulkPromises.push(executeBulkOperation(
-      channel,
-      'mutation call($input: ProductInput!) { productUpdate(input: $input) { product { id } userErrors { field message } } }',
-      productUpdateLines,
-      'productUpdate',
-      jobId
-    ));
+  // Bulk Op 1: productSet (product + variant + price + stock all in one)
+  if (productSetLines.length > 0) {
+    try {
+      console.log(`[SyncFlow] Bulk Op 1/2: productSet (${productSetLines.length} products)...`);
+      const r = await executeBulkOperation(
+        channel,
+        'mutation call($input: ProductSetInput!, $synchronous: Boolean!) { productSet(input: $input, synchronous: $synchronous) { product { id } userErrors { code field message } } }',
+        productSetLines,
+        'productSet',
+        jobId
+      );
+      console.log(`[SyncFlow] ✓ productSet done: objects=${r.objectCount}`);
+      bulkSuccess++;
+    } catch (err) {
+      console.error(`[SyncFlow] ✗ productSet failed:`, err);
+      bulkFail++;
+    }
   }
 
-  if (variantUpdateLines.length > 0) {
-    bulkLabels.push('variantUpdate');
-    bulkPromises.push(executeBulkOperation(
-      channel,
-      'mutation call($productId: ID!, $variants: [ProductVariantsBulkInput!]!) { productVariantsBulkUpdate(productId: $productId, variants: $variants) { productVariants { id } userErrors { field message } } }',
-      variantUpdateLines,
-      'variantUpdate',
-      jobId
-    ));
-  }
+  if (await isJobCancelled(jobId)) return;
 
-  if (stockUpdateLines.length > 0) {
-    bulkLabels.push('stockUpdate');
-    bulkPromises.push(executeBulkOperation(
-      channel,
-      'mutation call($input: InventorySetQuantitiesInput!) { inventorySetQuantities(input: $input) { inventoryAdjustmentGroup { reason } userErrors { field message } } }',
-      stockUpdateLines,
-      'stockUpdate',
-      jobId
-    ));
-  }
-
+  // Bulk Op 2: inventoryItemUpdate (tracking + weight)
   if (inventoryItemLines.length > 0) {
-    bulkLabels.push('inventoryItem');
-    bulkPromises.push(executeBulkOperation(
-      channel,
-      'mutation call($id: ID!, $input: InventoryItemInput!) { inventoryItemUpdate(id: $id, input: $input) { inventoryItem { id } userErrors { field message } } }',
-      inventoryItemLines,
-      'inventoryItem',
-      jobId
-    ));
-  }
-
-  if (bulkPromises.length > 0) {
-    console.log(`[SyncFlow] Waiting for ${bulkPromises.length} concurrent bulk ops: [${bulkLabels.join(', ')}]`);
-    const bulkResults = await Promise.all(bulkPromises);
-    for (let i = 0; i < bulkResults.length; i++) {
-      console.log(`[SyncFlow] Bulk ${bulkLabels[i]} done: objects=${bulkResults[i].objectCount}`);
+    try {
+      console.log(`[SyncFlow] Bulk Op 2/2: inventoryItem (${inventoryItemLines.length} items)...`);
+      const r = await executeBulkOperation(
+        channel,
+        'mutation call($id: ID!, $input: InventoryItemInput!) { inventoryItemUpdate(id: $id, input: $input) { inventoryItem { id } userErrors { field message } } }',
+        inventoryItemLines,
+        'inventoryItem',
+        jobId
+      );
+      console.log(`[SyncFlow] ✓ inventoryItem done: objects=${r.objectCount}`);
+      bulkSuccess++;
+    } catch (err) {
+      console.error(`[SyncFlow] ✗ inventoryItem failed:`, err);
+      bulkFail++;
     }
   }
 
   const bulkMs = Date.now() - startTime;
-  console.log(`[SyncFlow] Bulk operations completed in ${(bulkMs / 1000).toFixed(1)}s`);
+  const totalOps = (productSetLines.length > 0 ? 1 : 0) + (inventoryItemLines.length > 0 ? 1 : 0);
+  console.log(`[SyncFlow] Bulk phase: ${bulkSuccess}/${totalOps} ops succeeded in ${(bulkMs / 1000).toFixed(1)}s`);
+
+  // If ALL bulk ops failed, throw so caller falls back to turbo/ultra
+  if (totalOps > 0 && bulkSuccess === 0) {
+    throw new Error(`All ${totalOps} bulk operations failed`);
+  }
 
   await query(
     'UPDATE sync_jobs SET processed_count = $1, updated_count = $2 WHERE id = $3',
     [existingSingles.length, existingSingles.length, jobId]
   );
 
-  // Batch log all existing products (one DB call per 500 instead of per product)
+  // Batch log all existing products
   await batchLogSyncEntries(jobId, existingSingles.map(p => ({
     sku: p.sku,
     action: 'updated',
-    message: 'Bulk sync',
+    message: 'Bulk sync (productSet)',
   })));
 
-  // ── Post-bulk: handle new products and variant groups (small numbers, regular API) ──
+  // ── Post-bulk: new products + variant groups (regular parallel API) ──
   let processedCount = existingSingles.length;
 
   if (newSingles.length > 0 && !await isJobCancelled(jobId)) {
