@@ -30,11 +30,11 @@ export const generateMarketplaceContent = async (productDetails: Record<string, 
     ${JSON.stringify(productDetails, null, 2)}
 
     STRICT TITLE REQUIREMENTS:
-    1. Structure: [Brand Name] - [Model Number] - [Product Name] [Key Attributes/Style] [Color/Size].
-       Example: "Reebok Work - IB3484 - Nano X1 Adventure Safety Men's Composite Toe Work Shoes Lightweight, Slip-Resistant, Metal-Free Trail Sneakers, Size 37 Wide"
-    2. Consistency: If you are generating for multiple variants of the same product, the Title, Description, and Bullet Points MUST be identical for all rows, with the ONLY difference being the 'Size' or 'Color' attribute at the end of the Title.
-    3. Character limit: 80-150 characters (Max 200). DO NOT exceed 200.
-    4. Special Characters: NO "!", "$", "?", "_", "{", "}", "^", "¬", "¦". Use standard hyphens and commas only.
+    1. Structure (in this exact order): [Brand] + [Model] + [Department/Target Audience] + [Product Type] + [Key Feature 1] + [Key Feature 2] + [Key Feature 3] + [Color] + [Size]
+       Example: "Reebok - IB3484 - Men's - Safety Work Shoe - Composite Toe - Lightweight - Slip-Resistant - Black - Size 42"
+    2. Variant Consistency: If multiple rows share the same Brand + Model, their Title, Description, and Bullet Points MUST be 100% identical — ONLY the Color and/or Size at the end of the title should differ.
+    3. Character limit: 80-200 characters. DO NOT exceed 200.
+    4. Special Characters: NO "!", "$", "?", "_", "{", "}", "^", "¬", "¦". Use standard hyphens to separate segments.
     5. Promotional Content: NO "free shipping", "guaranteed", "best seller", or "hot item".
     6. Numbers: Use numerals (2 instead of Two).
     7. Capitalization: Capitalize the first letter of each word (except prepositions like 'in', 'on', 'with', conjunctions like 'and', 'or', and articles like 'the', 'a', 'an').
