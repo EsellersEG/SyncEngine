@@ -57,8 +57,8 @@ export const generateMarketplaceContent = async (productDetails: Record<string, 
   `;
 
   const response = await getAI().models.generateContent({
-    model: "gemini-1.5-flash",
-    contents: [{ parts: [{ text: prompt }] }],
+    model: "gemini-2.5-flash-preview-05-20",
+    contents: prompt,
     config: {
       responseMimeType: "application/json",
     },
@@ -66,9 +66,11 @@ export const generateMarketplaceContent = async (productDetails: Record<string, 
 
   const raw = response.text || "{}";
   try {
-    return JSON.parse(raw) as MarketplaceContent;
+    const parsed = JSON.parse(raw) as MarketplaceContent;
+    if (!parsed?.en?.title || !parsed?.ar?.title) throw new Error("Missing required fields in Gemini response");
+    return parsed;
   } catch (error) {
     console.error("Failed to parse Gemini response:", raw);
-    throw new Error("Gemini returned invalid JSON. Response: " + raw.slice(0, 200));
+    throw new Error("Gemini error: " + raw.slice(0, 300));
   }
 };
