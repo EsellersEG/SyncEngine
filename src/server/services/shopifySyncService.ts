@@ -2322,18 +2322,9 @@ export async function runSyncJob(config: SyncJobConfig) {
     console.log(`[SyncFlow] Job ${jobId} | Preset: ${preset} | Products: ${products.length} | Images: ${withImages}`);
 
     if (preset === 'price_stock_meta' || (config.fields && config.fields.every(f => ['price', 'stock', 'metafields'].includes(f)))) {
-      if (products.length > BULK_SYNC_THRESHOLD) {
-        console.log(`[SyncFlow] Pathway: BULK TURBO (${products.length} products)`);
-        try {
-          await bulkSync(channel, products, mappings, jobId, false, false, priceAdjustmentPercent, priceRoundingMode, warehouseName);
-        } catch (bulkErr) {
-          console.error('[SyncFlow] Bulk sync failed, falling back to turbo:', bulkErr);
-          await turboSync(channel, products, mappings, jobId, priceAdjustmentPercent, priceRoundingMode, warehouseName);
-        }
-      } else {
-        console.log('[SyncFlow] Pathway: TURBO');
-        await turboSync(channel, products, mappings, jobId, priceAdjustmentPercent, priceRoundingMode, warehouseName);
-      }
+      // Always use turboSync — Shopify bulk ops silently drop metafield updates
+      console.log(`[SyncFlow] Pathway: TURBO (${products.length} products, metafields need direct GraphQL)`);
+      await turboSync(channel, products, mappings, jobId, priceAdjustmentPercent, priceRoundingMode, warehouseName);
     } else {
       if (products.length > BULK_SYNC_THRESHOLD) {
         console.log(`[SyncFlow] Pathway: BULK ULTRA (${products.length} products, ${preset})`);
