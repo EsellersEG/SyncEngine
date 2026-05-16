@@ -1,14 +1,8 @@
-import { GoogleGenAI } from "@google/genai";
-
-let _ai: GoogleGenAI | null = null;
-function getAI(): GoogleGenAI {
-  if (!_ai) {
-    const key = import.meta.env.VITE_GEMINI_API_KEY;
-    if (!key) throw new Error("VITE_GEMINI_API_KEY is not set. Add it to your environment variables.");
-    _ai = new GoogleGenAI({ apiKey: key });
-  }
-  return _ai;
-}
+const getApiKey = (): string => {
+  const key = import.meta.env.VITE_GEMINI_API_KEY;
+  if (!key) throw new Error("VITE_GEMINI_API_KEY is not set.");
+  return key;
+};
 
 export interface MarketplaceContent {
   en: {
@@ -56,21 +50,34 @@ export const generateMarketplaceContent = async (productDetails: Record<string, 
     }
   `;
 
-  const response = await getAI().models.generateContent({
-    model: "gemini-2.5-flash-preview-05-20",
-    contents: prompt,
-    config: {
-      responseMimeType: "application/json",
-    },
+  const apiKey = getApiKey();
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: {
+        responseMimeType: "application/json",
+      },
+    }),
   });
 
-  const raw = response.text || "{}";
+  if (!res.ok) {
+    const errBody = await res.text();
+    throw new Error(`Gemini API ${res.status}: ${errBody.slice(0, 300)}`);
+  }
+
+  const data = await res.json();
+  const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+
   try {
     const parsed = JSON.parse(raw) as MarketplaceContent;
-    if (!parsed?.en?.title || !parsed?.ar?.title) throw new Error("Missing required fields in Gemini response");
+    if (!parsed?.en?.title || !parsed?.ar?.title) throw new Error("Missing required fields");
     return parsed;
   } catch (error) {
     console.error("Failed to parse Gemini response:", raw);
-    throw new Error("Gemini error: " + raw.slice(0, 300));
+    throw new Error("Gemini parse error: " + raw.slice(0, 300));
   }
 };
