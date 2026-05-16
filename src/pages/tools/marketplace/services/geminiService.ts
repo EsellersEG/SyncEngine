@@ -21,43 +21,91 @@ function trimProductDetails(product: Record<string, any>): Record<string, any> {
   return trimmed;
 }
 
-function buildPrompt(productDetails: Record<string, any>): string {
-  const trimmed = trimProductDetails(productDetails);
-  return `
-    You are an expert e-commerce copywriter for Amazon and Noon UAE/KSA.
-    Generate optimized marketplace content for the following product details:
-    ${JSON.stringify(trimmed, null, 2)}
-
-    STRICT TITLE REQUIREMENTS:
-    1. Structure (in this exact order): [Brand] + [Model] + [Department/Target Audience] + [Product Type] + [Key Feature 1] + [Key Feature 2] + [Key Feature 3] + [Color] + [Size]
-       Example: "Reebok - IB3484 - Men's - Safety Work Shoe - Composite Toe - Lightweight - Slip-Resistant - Black - Size 42"
-    2. Variant Consistency: If multiple rows share the same Brand + Model, their Title, Description, and Bullet Points MUST be 100% identical — ONLY the Color and/or Size at the end of the title should differ.
-    3. Character limit: 80-200 characters. DO NOT exceed 200.
-    4. Special Characters: NO "!", "$", "?", "_", "{", "}", "^", "¬", "¦". Use standard hyphens to separate segments.
-    5. Promotional Content: NO "free shipping", "guaranteed", "best seller", or "hot item".
-    6. Numbers: Use numerals (2 instead of Two).
-    7. Capitalization: Capitalize the first letter of each word (except prepositions like 'in', 'on', 'with', conjunctions like 'and', 'or', and articles like 'the', 'a', 'an').
-    8. NO ALL CAPS.
-    9. Abbreviations: Use "cm", "oz", "in", "kg".
-
-    DESCRIPTION & BULLETS:
-    - Description: Concise, engaging, focuses on performance.
-    - Bullets: Exactly 5 highly informative bullet points.
-
-    OUTPUT:
-    - Provide content in both English (EN) and Arabic (AR).
-    - Ensure Arabic is professional and optimized for GCC markets.
-
-    Return the result in the following JSON format ONLY:
-    {
-      "en": { "title": "...", "description": "...", "bulletPoints": ["...", "...", "...", "...", "..."] },
-      "ar": { "title": "...", "description": "...", "bulletPoints": ["...", "...", "...", "...", "..."] }
-    }
-  `;
+/** Get the brand exactly as written in the sheet */
+function getBrand(product: Record<string, any>): string {
+  return (product.Brand || product.brand || product.BRAND || '').trim();
 }
 
-export const generateMarketplaceContent = async (productDetails: Record<string, any>): Promise<MarketplaceContent> => {
-  const prompt = buildPrompt(productDetails);
+/** Get the model exactly as written in the sheet */
+function getModel(product: Record<string, any>): string {
+  return (product['Model Number'] || product.model || product.Model || product['Model'] || product.SKU?.split('-')?.[0] || '').trim();
+}
+
+/** Get color from the product */
+function getColor(product: Record<string, any>): string {
+  return (product.Color || product.color || product.COLOR || product.Colour || '').trim();
+}
+
+/** Get size from the product */
+function getSize(product: Record<string, any>): string {
+  return (product.Size || product.size || product.SIZE || '').trim();
+}
+
+/** Build a cache key for grouping variants */
+export function getGroupKey(product: Record<string, any>): string {
+  return `${getBrand(product)}|||${getModel(product)}`.toLowerCase();
+}
+
+/** Build a prompt for a product group (one AI call per brand+model group) */
+function buildGroupPrompt(representative: Record<string, any>, variantSummary: string, headers: string[]): string {
+  const trimmed = trimProductDetails(representative);
+  const brand = getBrand(representative);
+  const model = getModel(representative);
+
+  return `You are an expert e-commerce copywriter for Amazon and Noon UAE/KSA.
+
+PRODUCT DATA (from spreadsheet with columns: ${headers.join(', ')}):
+${JSON.stringify(trimmed, null, 2)}
+
+This product group has these variants (different Color/Size only):
+${variantSummary}
+
+CRITICAL RULES:
+- The brand is EXACTLY "${brand}" — use this EXACT spelling, do NOT change it.
+- The model is EXACTLY "${model}" — use this EXACT spelling.
+- ALL variants share the SAME Title template, Description, and Bullet Points.
+- Only Color and Size differ per variant.
+
+TITLE FORMAT (use "|" as separator, NOT "-"):
+[Brand] | [Model] | [Department/Target Audience] | [Product Type] | [Key Feature 1] | [Key Feature 2] | [Key Feature 3]
+
+IMPORTANT: Do NOT include Color or Size in the title. I will append those myself per variant.
+Example: "Reebokwork | IB3484 | Men's | Safety Work Shoe | Composite Toe | Slip-Resistant | Water-Resistant"
+
+TITLE RULES:
+- Character limit: 80-200 characters (without color/size suffix).
+- NO special characters: "!", "$", "?", "_", "{", "}", "^", "¬", "¦"
+- NO promotional text: "free shipping", "guaranteed", "best seller", "hot item"
+- Use numerals (2 instead of Two).
+- Capitalize first letter of each word (except prepositions/conjunctions/articles).
+- NO ALL CAPS.
+- Use abbreviations: "cm", "oz", "in", "kg".
+
+DESCRIPTION & BULLETS:
+- Description: Concise, engaging, performance-focused. 150-300 words.
+- Bullets: Exactly 5 highly informative bullet points.
+- Do NOT mention specific color or size in description or bullets (keep them generic for all variants).
+
+OUTPUT in both English (EN) and Arabic (AR). Arabic must be professional and optimized for GCC markets.
+
+Return ONLY this JSON:
+{
+  "en": { "title": "...", "description": "...", "bulletPoints": ["...", "...", "...", "...", "..."] },
+  "ar": { "title": "...", "description": "...", "bulletPoints": ["...", "...", "...", "...", "..."] }
+}`;
+}
+
+/** Generate content for a product group (one API call per brand+model) */
+export const generateGroupContent = async (
+  representative: Record<string, any>,
+  variants: Array<{ color: string; size: string }>,
+  headers: string[]
+): Promise<MarketplaceContent> => {
+  const variantSummary = variants.map((v, i) =>
+    `${i + 1}. Color: ${v.color || 'N/A'}, Size: ${v.size || 'N/A'}`
+  ).join('\n');
+
+  const prompt = buildGroupPrompt(representative, variantSummary, headers);
 
   const res = await fetch('/api/tools/gemini/generate', {
     method: 'POST',
@@ -77,7 +125,29 @@ export const generateMarketplaceContent = async (productDetails: Record<string, 
     if (!parsed?.en?.title || !parsed?.ar?.title) throw new Error("Missing required fields");
     return parsed;
   } catch (error) {
-    console.error("Failed to parse Gemini response:", text);
-    throw new Error("Gemini parse error: " + String(text).slice(0, 300));
+    console.error("Failed to parse AI response:", text);
+    throw new Error("AI parse error: " + String(text).slice(0, 300));
   }
+};
+
+/** Apply variant-specific color/size to a group template */
+export function applyVariant(template: MarketplaceContent, color: string, size: string): MarketplaceContent {
+  const content: MarketplaceContent = JSON.parse(JSON.stringify(template));
+  const suffix = [color, size ? `Size ${size}` : ''].filter(Boolean).join(' | ');
+  if (suffix) {
+    content.en.title = content.en.title + ' | ' + suffix;
+    // For Arabic, append color/size in a consistent way
+    const arSuffix = [color, size ? `مقاس ${size}` : ''].filter(Boolean).join(' | ');
+    content.ar.title = content.ar.title + ' | ' + arSuffix;
+  }
+  return content;
+}
+
+/** Legacy single-product generate (for the individual Generate button) */
+export const generateMarketplaceContent = async (productDetails: Record<string, any>): Promise<MarketplaceContent> => {
+  const headers = Object.keys(productDetails);
+  const color = getColor(productDetails);
+  const size = getSize(productDetails);
+  const template = await generateGroupContent(productDetails, [{ color, size }], headers);
+  return applyVariant(template, color, size);
 };

@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from 'express';
 
 const router = Router();
 
-const OPENAI_MODEL = 'gpt-4o-mini';
+const OPENAI_MODEL = 'gpt-4o';
 const MAX_RETRIES = 5;
 const BASE_DELAY_MS = 2000;
 

@@ -6,7 +6,7 @@ import {
 } from "lucide-react";
 import { initAuth, googleSignIn, marketplaceLogout, loadFirebaseConfig } from "./lib/firebase";
 import { SheetsService } from "./services/sheetsService";
-import { generateMarketplaceContent, MarketplaceContent } from "./services/geminiService";
+import { generateMarketplaceContent, generateGroupContent, applyVariant, getGroupKey, MarketplaceContent } from "./services/geminiService";
 import { Setup } from "./components/Setup";
 import { ProductTable, Status } from "./components/ProductTable";
 import { ContentPreview } from "./components/ContentPreview";
@@ -121,10 +121,9 @@ export default function MarketplaceContentPage() {
     cancelRef.current = false;
     setIsGeneratingAll(true);
 
-    const modelCache: Record<string, MarketplaceContent> = {};
-
     try {
       const service = new SheetsService(token);
+      const headers = products.length > 0 ? Object.keys(products[0]) : [];
 
       const metadata = await service.getSpreadsheet(spreadsheetId);
       const sheetExists = metadata.sheets.some((s: any) => s.properties.title === 'Marketplace Content');
@@ -148,67 +147,98 @@ export default function MarketplaceContentPage() {
         }
       } catch { /* sheet may be empty */ }
 
+      // Group products by brand+model → one AI call per group
+      const groups: Record<string, number[]> = {};
       for (let i = 0; i < products.length; i++) {
-        if (cancelRef.current) break;
-        if (processingStates[i] === 'done') continue;
+        const key = getGroupKey(products[i]);
+        if (!groups[key]) groups[key] = [];
+        groups[key].push(i);
+      }
 
-        // Skip already-written SKUs (resume support)
-        const sku = (products[i].SKU || products[i].sku || '').trim();
-        if (sku && doneSKUs.has(sku)) {
-          setProcessingStates(prev => ({ ...prev, [i]: 'done' }));
-          setWrittenIndices(prev => new Set(prev).add(i));
-          continue;
+      const groupTemplates: Record<string, MarketplaceContent> = {};
+      let apiCallCount = 0;
+
+      for (const [groupKey, indices] of Object.entries(groups)) {
+        if (cancelRef.current) break;
+
+        // Check if all in group are already done
+        const pendingIndices = indices.filter(i => {
+          if (processingStates[i] === 'done') return false;
+          const sku = (products[i].SKU || products[i].sku || '').trim();
+          if (sku && doneSKUs.has(sku)) {
+            setProcessingStates(prev => ({ ...prev, [i]: 'done' }));
+            setWrittenIndices(prev => new Set(prev).add(i));
+            return false;
+          }
+          return true;
+        });
+        if (pendingIndices.length === 0) continue;
+
+        // Mark all pending in this group as processing
+        for (const i of pendingIndices) {
+          setProcessingStates(prev => ({ ...prev, [i]: 'processing' }));
         }
 
-        // Pace requests: 4.5s gap keeps us safely under 15 RPM free-tier limit
-        if (i > 0) await new Promise(resolve => setTimeout(resolve, 4500));
+        // Generate template once for the group
+        if (!groupTemplates[groupKey]) {
+          // Pace between API calls
+          if (apiCallCount > 0) await new Promise(resolve => setTimeout(resolve, 1500));
+          if (cancelRef.current) break;
 
-        setProcessingStates(prev => ({ ...prev, [i]: 'processing' }));
-        try {
-          const product = products[i];
-          const brand = (product.Brand || product.brand || '').trim();
-          const model = (product['Model Number'] || product.model || product.Model || '').trim();
-          const cacheKey = `${brand}-${model}`.toLowerCase();
+          const representative = products[indices[0]];
+          const variants = indices.map(i => ({
+            color: (products[i].Color || products[i].color || products[i].COLOR || products[i].Colour || '').trim(),
+            size: (products[i].Size || products[i].size || products[i].SIZE || '').trim(),
+          }));
 
-          let content: MarketplaceContent;
-          if (model && modelCache[cacheKey]) {
-            // Reuse cached content for same brand+model variants (saves quota)
-            content = JSON.parse(JSON.stringify(modelCache[cacheKey]));
-            // Swap color/size in titles for this specific variant
-            const color = (product.Color || product.color || '').trim();
-            const size = (product.Size || product.size || '').trim();
-            if (color || size) {
-              const suffix = [color, size].filter(Boolean).join(' - ');
-              // Replace last color/size segment in title
-              content.en.title = content.en.title.replace(/ - [^-]+$/, '') + (suffix ? ' - ' + suffix : '');
+          try {
+            const template = await generateGroupContent(representative, variants, headers);
+            groupTemplates[groupKey] = template;
+            apiCallCount++;
+          } catch (err: any) {
+            console.error(`Error generating for group ${groupKey}:`, err);
+            for (const i of pendingIndices) {
+              setProcessingStates(prev => ({ ...prev, [i]: 'error' }));
+              setErrorMessages(prev => ({ ...prev, [i]: err?.message || 'Unknown error' }));
             }
-          } else {
-            content = await generateMarketplaceContent(product);
-            if (model) modelCache[cacheKey] = content;
+            if (err.message?.includes('429') || err.message?.includes('quota') || err.message?.includes('RESOURCE_EXHAUSTED')) {
+              console.log(`[GenerateAll] Rate limited, waiting 60s...`);
+              await new Promise(resolve => setTimeout(resolve, 60000));
+            }
+            continue;
           }
+        }
 
-          setGeneratedResults(prev => ({ ...prev, [i]: content }));
+        const template = groupTemplates[groupKey];
 
-          const barcode = product['International Barcode'] || product.barcode || '';
+        // Apply variant (color/size) to each product in the group and write to sheet
+        for (const i of pendingIndices) {
+          if (cancelRef.current) break;
+          try {
+            const product = products[i];
+            const color = (product.Color || product.color || product.COLOR || product.Colour || '').trim();
+            const size = (product.Size || product.size || product.SIZE || '').trim();
+            const content = applyVariant(template, color, size);
 
-          const rowData = [
-            sku, barcode, 'Amazon/Noon', 'Bilingual',
-            content.en.title, content.en.description, ...content.en.bulletPoints,
-            content.ar.title, content.ar.description, ...content.ar.bulletPoints,
-          ];
+            setGeneratedResults(prev => ({ ...prev, [i]: content }));
 
-          await service.appendValues(spreadsheetId, 'Marketplace Content!A1', [rowData]);
-          doneSKUs.add(sku);
-          setProcessingStates(prev => ({ ...prev, [i]: 'done' }));
-          setWrittenIndices(prev => new Set(prev).add(i));
-        } catch (err: any) {
-          console.error(`Error processing product ${i}:`, err);
-          setProcessingStates(prev => ({ ...prev, [i]: 'error' }));
-          setErrorMessages(prev => ({ ...prev, [i]: err?.message || 'Unknown error' }));
-          if (err.message?.includes('429') || err.message?.includes('quota') || err.message?.includes('RESOURCE_EXHAUSTED')) {
-            // Server retries will handle transient 429s; if it still fails, pause and continue
-            console.log(`[GenerateAll] Rate limited at product ${i}, waiting 60s before continuing...`);
-            await new Promise(resolve => setTimeout(resolve, 60000));
+            const sku = (product.SKU || product.sku || '').trim();
+            const barcode = product['International Barcode'] || product.barcode || '';
+
+            const rowData = [
+              sku, barcode, 'Amazon/Noon', 'Bilingual',
+              content.en.title, content.en.description, ...content.en.bulletPoints,
+              content.ar.title, content.ar.description, ...content.ar.bulletPoints,
+            ];
+
+            await service.appendValues(spreadsheetId, 'Marketplace Content!A1', [rowData]);
+            doneSKUs.add(sku);
+            setProcessingStates(prev => ({ ...prev, [i]: 'done' }));
+            setWrittenIndices(prev => new Set(prev).add(i));
+          } catch (err: any) {
+            console.error(`Error writing product ${i}:`, err);
+            setProcessingStates(prev => ({ ...prev, [i]: 'error' }));
+            setErrorMessages(prev => ({ ...prev, [i]: err?.message || 'Unknown error' }));
           }
         }
       }
