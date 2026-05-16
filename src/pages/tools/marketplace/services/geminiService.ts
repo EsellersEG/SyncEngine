@@ -41,8 +41,16 @@ function getSize(product: Record<string, any>): string {
   return (product.Size || product.size || product.SIZE || '').trim();
 }
 
-/** Build a cache key for grouping variants */
+/** Get the handle — products sharing the same handle are variants */
+function getHandle(product: Record<string, any>): string {
+  return (product.Handle || product.handle || product.HANDLE || '').trim();
+}
+
+/** Build a cache key for grouping variants — by Handle */
 export function getGroupKey(product: Record<string, any>): string {
+  const handle = getHandle(product);
+  if (handle) return handle.toLowerCase();
+  // Fallback if no Handle column: use brand+model
   return `${getBrand(product)}|||${getModel(product)}`.toLowerCase();
 }
 
