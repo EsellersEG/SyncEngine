@@ -225,10 +225,13 @@ export default function SyncPage() {
   const shopifyChannels = channels.filter(ch => ch.type === 'shopify' || ch.type === 'noon' || ch.type === 'amazon');
 
   function getDuration(job: SyncJob): string {
-    if (!job.started_at) return '-';
+    if (!job.started_at || (job.status !== 'completed' && job.status !== 'failed')) return '-';
     const end = job.completed_at ? new Date(job.completed_at) : new Date();
-    const seconds = Math.round((end.getTime() - new Date(job.started_at).getTime()) / 1000);
-    return `${seconds}s`;
+    const totalSeconds = Math.max(0, Math.round((end.getTime() - new Date(job.started_at).getTime()) / 1000));
+    const h = Math.floor(totalSeconds / 3600);
+    const m = Math.floor((totalSeconds % 3600) / 60);
+    const s = totalSeconds % 60;
+    return `${h}H ${m}M ${s}S`;
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -404,7 +407,7 @@ export default function SyncPage() {
                       <td style={{ fontSize: 13, color: '#60a5fa' }}>{job.updated_count}</td>
                       <td style={{ fontSize: 13, color: '#94a3b8' }}>{job.skipped_count}</td>
                       <td style={{ fontSize: 13, color: '#f87171' }}>{job.failed_count}</td>
-                      <td style={{ fontSize: 12, color: '#64748b' }}>{getDuration(job)}</td>
+                      <td style={{ fontSize: 12, color: '#a78bfa', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap' }}>{getDuration(job)}</td>
                       <td style={{ fontSize: 11, color: '#f87171', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={job.error_message || ''}>
                         {job.error_message ? job.error_message.slice(0, 30) : '-'}
                       </td>
