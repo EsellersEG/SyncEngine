@@ -131,9 +131,30 @@ export default function MarketplaceContentPage() {
         ]]);
       }
 
+      // Resume: check which SKUs are already in "Marketplace Content" sheet
+      const doneSKUs = new Set<string>();
+      try {
+        const existingRows = await service.getValues(spreadsheetId, 'Marketplace Content!A:A');
+        if (existingRows) {
+          for (const row of existingRows) {
+            if (row[0]) doneSKUs.add(String(row[0]).trim());
+          }
+        }
+      } catch { /* sheet may be empty */ }
+
       for (let i = 0; i < products.length; i++) {
         if (processingStates[i] === 'done') continue;
-        if (i > 0) await new Promise(resolve => setTimeout(resolve, 1000));
+
+        // Skip already-written SKUs (resume support)
+        const sku = (products[i].SKU || products[i].sku || '').trim();
+        if (sku && doneSKUs.has(sku)) {
+          setProcessingStates(prev => ({ ...prev, [i]: 'done' }));
+          setWrittenIndices(prev => new Set(prev).add(i));
+          continue;
+        }
+
+        // Pace requests: 4.5s gap keeps us safely under 15 RPM free-tier limit
+        if (i > 0) await new Promise(resolve => setTimeout(resolve, 4500));
 
         setProcessingStates(prev => ({ ...prev, [i]: 'processing' }));
         try {
@@ -144,7 +165,16 @@ export default function MarketplaceContentPage() {
 
           let content: MarketplaceContent;
           if (model && modelCache[cacheKey]) {
-            content = await generateMarketplaceContent(product);
+            // Reuse cached content for same brand+model variants (saves quota)
+            content = JSON.parse(JSON.stringify(modelCache[cacheKey]));
+            // Swap color/size in titles for this specific variant
+            const color = (product.Color || product.color || '').trim();
+            const size = (product.Size || product.size || '').trim();
+            if (color || size) {
+              const suffix = [color, size].filter(Boolean).join(' - ');
+              // Replace last color/size segment in title
+              content.en.title = content.en.title.replace(/ - [^-]+$/, '') + (suffix ? ' - ' + suffix : '');
+            }
           } else {
             content = await generateMarketplaceContent(product);
             if (model) modelCache[cacheKey] = content;
@@ -152,7 +182,6 @@ export default function MarketplaceContentPage() {
 
           setGeneratedResults(prev => ({ ...prev, [i]: content }));
 
-          const sku = product.SKU || product.sku || '';
           const barcode = product['International Barcode'] || product.barcode || '';
 
           const rowData = [
@@ -162,14 +191,17 @@ export default function MarketplaceContentPage() {
           ];
 
           await service.appendValues(spreadsheetId, 'Marketplace Content!A1', [rowData]);
+          doneSKUs.add(sku);
           setProcessingStates(prev => ({ ...prev, [i]: 'done' }));
           setWrittenIndices(prev => new Set(prev).add(i));
         } catch (err: any) {
           console.error(`Error processing product ${i}:`, err);
           setProcessingStates(prev => ({ ...prev, [i]: 'error' }));
-          if (err.message?.includes('quota') || err.message?.includes('429')) {
-            alert("Rate limit exceeded. Please wait a minute before trying remaining products.");
-            break;
+          setErrorMessages(prev => ({ ...prev, [i]: err?.message || 'Unknown error' }));
+          if (err.message?.includes('429') || err.message?.includes('quota') || err.message?.includes('RESOURCE_EXHAUSTED')) {
+            // Server retries will handle transient 429s; if it still fails, pause and continue
+            console.log(`[GenerateAll] Rate limited at product ${i}, waiting 60s before continuing...`);
+            await new Promise(resolve => setTimeout(resolve, 60000));
           }
         }
       }

@@ -1,20 +1,3 @@
-let _cachedApiKey: string | null = null;
-
-const getApiKey = async (): Promise<string> => {
-  // Try build-time env first, then fetch from server at runtime
-  const buildTimeKey = import.meta.env.VITE_GEMINI_API_KEY;
-  if (buildTimeKey) return buildTimeKey;
-
-  if (_cachedApiKey) return _cachedApiKey;
-
-  const res = await fetch('/api/config/public');
-  if (!res.ok) throw new Error("Failed to load config from server");
-  const data = await res.json();
-  if (!data.geminiApiKey) throw new Error("VITE_GEMINI_API_KEY not configured on server.");
-  _cachedApiKey = data.geminiApiKey;
-  return _cachedApiKey!;
-};
-
 export interface MarketplaceContent {
   en: {
     title: string;
@@ -28,11 +11,22 @@ export interface MarketplaceContent {
   };
 }
 
-export const generateMarketplaceContent = async (productDetails: Record<string, any>): Promise<MarketplaceContent> => {
-  const prompt = `
+function trimProductDetails(product: Record<string, any>): Record<string, any> {
+  const trimmed: Record<string, any> = {};
+  for (const [key, value] of Object.entries(product)) {
+    if (value !== undefined && value !== null && String(value).trim() !== '') {
+      trimmed[key] = value;
+    }
+  }
+  return trimmed;
+}
+
+function buildPrompt(productDetails: Record<string, any>): string {
+  const trimmed = trimProductDetails(productDetails);
+  return `
     You are an expert e-commerce copywriter for Amazon and Noon UAE/KSA.
     Generate optimized marketplace content for the following product details:
-    ${JSON.stringify(productDetails, null, 2)}
+    ${JSON.stringify(trimmed, null, 2)}
 
     STRICT TITLE REQUIREMENTS:
     1. Structure (in this exact order): [Brand] + [Model] + [Department/Target Audience] + [Product Type] + [Key Feature 1] + [Key Feature 2] + [Key Feature 3] + [Color] + [Size]
@@ -60,35 +54,30 @@ export const generateMarketplaceContent = async (productDetails: Record<string, 
       "ar": { "title": "...", "description": "...", "bulletPoints": ["...", "...", "...", "...", "..."] }
     }
   `;
+}
 
-  const apiKey = await getApiKey();
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(apiKey)}`;
+export const generateMarketplaceContent = async (productDetails: Record<string, any>): Promise<MarketplaceContent> => {
+  const prompt = buildPrompt(productDetails);
 
-  const res = await fetch(url, {
+  const res = await fetch('/api/tools/gemini/generate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: {
-        responseMimeType: "application/json",
-      },
-    }),
+    body: JSON.stringify({ prompt }),
   });
 
   if (!res.ok) {
-    const errBody = await res.text();
-    throw new Error(`Gemini API ${res.status}: ${errBody.slice(0, 300)}`);
+    const errData = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+    throw new Error(errData.error || `Server error ${res.status}`);
   }
 
-  const data = await res.json();
-  const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+  const { text } = await res.json();
 
   try {
-    const parsed = JSON.parse(raw) as MarketplaceContent;
+    const parsed = JSON.parse(text) as MarketplaceContent;
     if (!parsed?.en?.title || !parsed?.ar?.title) throw new Error("Missing required fields");
     return parsed;
   } catch (error) {
-    console.error("Failed to parse Gemini response:", raw);
-    throw new Error("Gemini parse error: " + raw.slice(0, 300));
+    console.error("Failed to parse Gemini response:", text);
+    throw new Error("Gemini parse error: " + String(text).slice(0, 300));
   }
 };

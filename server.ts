@@ -20,6 +20,7 @@ import invoiceRoutes from './src/server/routes/invoices.js';
 import taskRoutes from './src/server/routes/tasks.js';
 import noonRoutes from './src/server/routes/noon.js';
 import amazonRoutes from './src/server/routes/amazon.js';
+import toolsRoutes from './src/server/routes/tools.js';
 import { startScheduler } from './src/server/services/scheduler.js';
 import { query } from './src/server/db.js';
 import { blockClientWrites, type AuthRequest } from './src/server/middleware/auth.js';
@@ -62,6 +63,7 @@ app.use('/api/invoices', invoiceRoutes);
 app.use('/api/tasks', taskRoutes);
 app.use('/api/noon', noonRoutes);
 app.use('/api/amazon', amazonRoutes);
+app.use('/api/tools', toolsRoutes);
 app.use('/webhooks', webhookRoutes);
 
 // ── Health Check ───────────────────────────────────────────────────────────
@@ -71,9 +73,7 @@ app.get('/api/health', (_req, res) => {
 
 // ── Public config for frontend tools (non-sensitive runtime config) ────────
 app.get('/api/config/public', (_req, res) => {
-  res.json({
-    geminiApiKey: process.env.VITE_GEMINI_API_KEY || '',
-  });
+  res.json({});
 });
 
 // ── Serve Frontend ─────────────────────────────────────────────────────────

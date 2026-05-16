@@ -12,8 +12,8 @@ RUN npm install
 COPY . .
 
 # Accept VITE_ env vars at build time (Railway passes service variables as build args)
-ARG VITE_GEMINI_API_KEY
-ENV VITE_GEMINI_API_KEY=$VITE_GEMINI_API_KEY
+ARG OPENAI_API_KEY
+ENV OPENAI_API_KEY=$OPENAI_API_KEY
 
 # Build frontend + backend
 RUN npm run build:all
