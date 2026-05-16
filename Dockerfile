@@ -11,6 +11,10 @@ RUN npm install
 # Copy source code
 COPY . .
 
+# Accept VITE_ env vars at build time (Railway passes service variables as build args)
+ARG VITE_GEMINI_API_KEY
+ENV VITE_GEMINI_API_KEY=$VITE_GEMINI_API_KEY
+
 # Build frontend + backend
 RUN npm run build:all
 
