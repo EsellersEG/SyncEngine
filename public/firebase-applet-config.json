@@ -1,10 +1,9 @@
 {
-  "projectId": "cogent-memory-wcf5x",
-  "appId": "1:21056423751:web:dc6e88382e33defc09ee62",
-  "apiKey": "AIzaSyA92tbNoED2VH8V0nKm_2Xw7LLNhnjNmwM",
-  "authDomain": "cogent-memory-wcf5x.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-eaf573e9-aca7-4106-83f9-80985f73f036",
-  "storageBucket": "cogent-memory-wcf5x.firebasestorage.app",
-  "messagingSenderId": "21056423751",
-  "measurementId": ""
+  "apiKey": "AIzaSyB6HVi607UWV7Hzk-M7xpH3xKesT7vzQQk",
+  "authDomain": "syncengin.firebaseapp.com",
+  "projectId": "syncengin",
+  "storageBucket": "syncengin.firebasestorage.app",
+  "messagingSenderId": "539882769109",
+  "appId": "1:539882769109:web:83ed14bd6126528e8f305c",
+  "measurementId": "G-Q0Z0PXRESJ"
 }
