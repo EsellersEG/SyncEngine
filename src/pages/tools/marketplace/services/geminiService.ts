@@ -1,6 +1,14 @@
 import { GoogleGenAI } from "@google/genai";
 
-const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
+let _ai: GoogleGenAI | null = null;
+function getAI(): GoogleGenAI {
+  if (!_ai) {
+    const key = import.meta.env.VITE_GEMINI_API_KEY;
+    if (!key) throw new Error("VITE_GEMINI_API_KEY is not set. Add it to your environment variables.");
+    _ai = new GoogleGenAI({ apiKey: key });
+  }
+  return _ai;
+}
 
 export interface MarketplaceContent {
   en: {
@@ -48,7 +56,7 @@ export const generateMarketplaceContent = async (productDetails: Record<string, 
     }
   `;
 
-  const response = await ai.models.generateContent({
+  const response = await getAI().models.generateContent({
     model: "gemini-2.0-flash",
     contents: [{ parts: [{ text: prompt }] }],
     config: {
