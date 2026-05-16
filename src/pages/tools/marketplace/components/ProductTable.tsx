@@ -5,12 +5,13 @@ export type Status = 'idle' | 'processing' | 'done' | 'error';
 interface ProductTableProps {
   products: any[];
   processingStates: Record<number, Status>;
+  errorMessages?: Record<number, string>;
   onProcess: (index: number) => void;
   onPreview: (index: number) => void;
   isWriting: boolean;
 }
 
-export function ProductTable({ products, processingStates, onProcess, onPreview }: ProductTableProps) {
+export function ProductTable({ products, processingStates, errorMessages = {}, onProcess, onPreview }: ProductTableProps) {
   if (products.length === 0) return null;
 
   return (
@@ -97,7 +98,7 @@ export function ProductTable({ products, processingStates, onProcess, onPreview 
   );
 }
 
-function StatusBadge({ status }: { status: Status }) {
+function StatusBadge({ status, errorMessage }: { status: Status; errorMessage?: string }) {
   const base: React.CSSProperties = {
     display: 'inline-flex', alignItems: 'center', gap: 6,
     padding: '2px 12px', borderRadius: 999,
@@ -114,8 +115,9 @@ function StatusBadge({ status }: { status: Status }) {
     </span>
   );
   if (status === 'error') return (
-    <span style={{ ...base, background: 'rgba(239,68,68,0.1)', color: '#ef4444' }}>
-      Error
+    <span style={{ ...base, background: 'rgba(239,68,68,0.1)', color: '#ef4444', cursor: 'help', maxWidth: 260 }}
+      title={errorMessage || 'Unknown error'}>
+      Error{errorMessage ? ': ' + errorMessage.slice(0, 60) + (errorMessage.length > 60 ? '…' : '') : ''}
     </span>
   );
   return (

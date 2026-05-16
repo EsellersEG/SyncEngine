@@ -57,17 +57,18 @@ export const generateMarketplaceContent = async (productDetails: Record<string, 
   `;
 
   const response = await getAI().models.generateContent({
-    model: "gemini-2.0-flash",
+    model: "gemini-1.5-flash",
     contents: [{ parts: [{ text: prompt }] }],
     config: {
       responseMimeType: "application/json",
     },
   });
 
+  const raw = response.text || "{}";
   try {
-    return JSON.parse(response.text || "{}") as MarketplaceContent;
+    return JSON.parse(raw) as MarketplaceContent;
   } catch (error) {
-    console.error("Failed to parse Gemini response:", error);
-    throw new Error("Failed to generate content in the correct format.");
+    console.error("Failed to parse Gemini response:", raw);
+    throw new Error("Gemini returned invalid JSON. Response: " + raw.slice(0, 200));
   }
 };

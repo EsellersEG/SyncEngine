@@ -21,6 +21,7 @@ export default function MarketplaceContentPage() {
   const [sheetTab, setSheetTab] = useState("Products");
   const [products, setProducts] = useState<any[]>([]);
   const [processingStates, setProcessingStates] = useState<Record<number, Status>>({});
+  const [errorMessages, setErrorMessages] = useState<Record<number, string>>({});
   const [generatedResults, setGeneratedResults] = useState<Record<number, MarketplaceContent>>({});
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
 
@@ -103,9 +104,10 @@ export default function MarketplaceContentPage() {
       setGeneratedResults(prev => ({ ...prev, [index]: content }));
       setProcessingStates(prev => ({ ...prev, [index]: 'done' }));
       setSelectedIdx(index);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
       setProcessingStates(prev => ({ ...prev, [index]: 'error' }));
+      setErrorMessages(prev => ({ ...prev, [index]: err?.message || 'Unknown error' }));
     }
   };
 
@@ -378,6 +380,7 @@ export default function MarketplaceContentPage() {
           <ProductTable
             products={products}
             processingStates={processingStates}
+            errorMessages={errorMessages}
             onProcess={handleProcess}
             onPreview={setSelectedIdx}
             isWriting={isWriting}
