@@ -69,6 +69,13 @@ app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', version: '1.0.0', timestamp: new Date().toISOString() });
 });
 
+// ── Public config for frontend tools (non-sensitive runtime config) ────────
+app.get('/api/config/public', (_req, res) => {
+  res.json({
+    geminiApiKey: process.env.VITE_GEMINI_API_KEY || '',
+  });
+});
+
 // ── Serve Frontend ─────────────────────────────────────────────────────────
 // The server is bundled to dist/server.js, so dist/client is a sibling folder.
 // We use import.meta.url so this works correctly regardless of cwd.

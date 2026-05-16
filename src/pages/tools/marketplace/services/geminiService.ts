@@ -1,7 +1,18 @@
-const getApiKey = (): string => {
-  const key = import.meta.env.VITE_GEMINI_API_KEY;
-  if (!key) throw new Error("VITE_GEMINI_API_KEY is not set.");
-  return key;
+let _cachedApiKey: string | null = null;
+
+const getApiKey = async (): Promise<string> => {
+  // Try build-time env first, then fetch from server at runtime
+  const buildTimeKey = import.meta.env.VITE_GEMINI_API_KEY;
+  if (buildTimeKey) return buildTimeKey;
+
+  if (_cachedApiKey) return _cachedApiKey;
+
+  const res = await fetch('/api/config/public');
+  if (!res.ok) throw new Error("Failed to load config from server");
+  const data = await res.json();
+  if (!data.geminiApiKey) throw new Error("VITE_GEMINI_API_KEY not configured on server.");
+  _cachedApiKey = data.geminiApiKey;
+  return _cachedApiKey!;
 };
 
 export interface MarketplaceContent {
@@ -50,8 +61,8 @@ export const generateMarketplaceContent = async (productDetails: Record<string, 
     }
   `;
 
-  const apiKey = getApiKey();
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+  const apiKey = await getApiKey();
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(apiKey)}`;
 
   const res = await fetch(url, {
     method: 'POST',
