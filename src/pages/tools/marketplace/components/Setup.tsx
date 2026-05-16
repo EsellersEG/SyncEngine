@@ -1,13 +1,14 @@
-import { Search, Loader2, Link2 } from "lucide-react";
+import { Search, Loader2, Link2, TableProperties } from "lucide-react";
 import { useState } from "react";
 
 interface SetupProps {
-  onIdSubmit: (id: string) => void;
+  onIdSubmit: (id: string, sheetTab: string) => void;
   isLoading: boolean;
 }
 
 export function Setup({ onIdSubmit, isLoading }: SetupProps) {
   const [url, setUrl] = useState("");
+  const [sheetTab, setSheetTab] = useState("Products");
 
   const extractId = (input: string) => {
     const match = input.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
@@ -17,7 +18,7 @@ export function Setup({ onIdSubmit, isLoading }: SetupProps) {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const id = extractId(url);
-    if (id) onIdSubmit(id);
+    if (id) onIdSubmit(id, sheetTab || "Products");
   };
 
   return (
@@ -58,6 +59,30 @@ export function Setup({ onIdSubmit, isLoading }: SetupProps) {
               required
             />
           </div>
+          <div style={{ position: 'relative' }}>
+            <TableProperties size={20} style={{ position: 'absolute', left: 16, top: '50%', transform: 'translateY(-50%)', color: '#64748b', pointerEvents: 'none' }} />
+            <input
+              type="text"
+              value={sheetTab}
+              onChange={(e) => setSheetTab(e.target.value)}
+              placeholder="Sheet tab name"
+              style={{
+                width: '100%',
+                paddingLeft: 48,
+                paddingRight: 16,
+                paddingTop: 12,
+                paddingBottom: 12,
+                background: 'rgba(0,0,0,0.4)',
+                border: '1px solid rgba(255,255,255,0.05)',
+                borderRadius: 12,
+                outline: 'none',
+                color: '#e2e8f0',
+                fontSize: 14,
+                boxSizing: 'border-box',
+              }}
+            />
+            <span style={{ position: 'absolute', right: 14, top: '50%', transform: 'translateY(-50%)', fontSize: 10, color: '#475569', fontFamily: 'monospace', textTransform: 'uppercase' }}>tab name</span>
+          </div>
           <button
             type="submit"
             disabled={isLoading || !url}
@@ -84,7 +109,7 @@ export function Setup({ onIdSubmit, isLoading }: SetupProps) {
         <div style={{ marginTop: 24, paddingTop: 24, borderTop: '1px solid rgba(255,255,255,0.05)' }}>
           <p className="mcg-label" style={{ marginBottom: 8 }}>Instructions</p>
           <div style={{ fontSize: 12, color: '#64748b', display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <p>• Make sure the sheet has a tab named <code style={{ background: 'rgba(255,255,255,0.05)', padding: '0 4px', borderRadius: 4, color: '#e2e8f0' }}>Products</code></p>
+            <p>• Make sure the sheet has a tab matching the name above (default: <code style={{ background: 'rgba(255,255,255,0.05)', padding: '0 4px', borderRadius: 4, color: '#e2e8f0' }}>Products</code>)</p>
             <p>• Ensure row 1 contains headers (Title, Description, etc.)</p>
           </div>
         </div>

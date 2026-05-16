@@ -18,6 +18,7 @@ export default function MarketplaceContentPage() {
   const [isInitializing, setIsInitializing] = useState(true);
 
   const [spreadsheetId, setSpreadsheetId] = useState<string | null>(null);
+  const [sheetTab, setSheetTab] = useState("Products");
   const [products, setProducts] = useState<any[]>([]);
   const [processingStates, setProcessingStates] = useState<Record<number, Status>>({});
   const [generatedResults, setGeneratedResults] = useState<Record<number, MarketplaceContent>>({});
@@ -74,20 +75,21 @@ export default function MarketplaceContentPage() {
     setWrittenIndices(new Set());
   };
 
-  const handleIdSubmit = async (id: string) => {
+  const handleIdSubmit = async (id: string, tab: string) => {
     if (!token) return;
     setIsLoading(true);
     try {
       const service = new SheetsService(token);
-      const values = await service.getValues(id, 'Products!A:Z');
+      const values = await service.getValues(id, `${tab}!A:Z`);
       const parsed = SheetsService.parseSheetData(values);
       setProducts(parsed);
       setSpreadsheetId(id);
+      setSheetTab(tab);
       setProcessingStates({});
       setGeneratedResults({});
       setWrittenIndices(new Set());
     } catch (err: any) {
-      alert("Error: " + err.message + ". Make sure the sheet has a 'Products' tab.");
+      alert("Error: " + err.message + `. Make sure the sheet has a '${tab}' tab.`);
     } finally {
       setIsLoading(false);
     }
@@ -308,7 +310,7 @@ export default function MarketplaceContentPage() {
         </div>
 
       ) : !spreadsheetId ? (
-        <Setup onIdSubmit={handleIdSubmit} isLoading={isLoading} />
+        <Setup onIdSubmit={handleIdSubmit} isLoading={isLoading} />  
 
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
