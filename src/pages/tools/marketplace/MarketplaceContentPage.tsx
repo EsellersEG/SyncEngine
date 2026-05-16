@@ -1,8 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { User } from "firebase/auth";
 import {
   ShoppingBag, LogOut, CheckCircle2, AlertCircle,
-  Database, Settings, Sparkles, Loader2
+  Database, Settings, Sparkles, Loader2, StopCircle
 } from "lucide-react";
 import { initAuth, googleSignIn, marketplaceLogout, loadFirebaseConfig } from "./lib/firebase";
 import { SheetsService } from "./services/sheetsService";
@@ -29,6 +29,7 @@ export default function MarketplaceContentPage() {
   const [isWriting, setIsWriting] = useState(false);
   const [writtenIndices, setWrittenIndices] = useState<Set<number>>(new Set());
   const [isGeneratingAll, setIsGeneratingAll] = useState(false);
+  const cancelRef = useRef(false);
 
   useEffect(() => {
     const checkConfig = async () => {
@@ -111,8 +112,13 @@ export default function MarketplaceContentPage() {
     }
   };
 
+  const handleStopGenerating = () => {
+    cancelRef.current = true;
+  };
+
   const handleGenerateAll = async () => {
     if (!spreadsheetId || !token || products.length === 0) return;
+    cancelRef.current = false;
     setIsGeneratingAll(true);
 
     const modelCache: Record<string, MarketplaceContent> = {};
@@ -143,6 +149,7 @@ export default function MarketplaceContentPage() {
       } catch { /* sheet may be empty */ }
 
       for (let i = 0; i < products.length; i++) {
+        if (cancelRef.current) break;
         if (processingStates[i] === 'done') continue;
 
         // Skip already-written SKUs (resume support)
@@ -362,26 +369,48 @@ export default function MarketplaceContentPage() {
               </div>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <button
-                onClick={handleGenerateAll}
-                disabled={isGeneratingAll || products.length === 0}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 8,
-                  padding: '8px 20px',
-                  background: isGeneratingAll ? 'rgba(16,185,129,0.5)' : '#10b981',
-                  color: '#000',
-                  border: 'none',
-                  borderRadius: 8,
-                  fontSize: 12,
-                  fontWeight: 700,
-                  cursor: isGeneratingAll ? 'not-allowed' : 'pointer',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.05em',
-                }}
-              >
-                {isGeneratingAll ? <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> : <Sparkles size={16} />}
-                Generate All
-              </button>
+              {isGeneratingAll ? (
+                <button
+                  onClick={handleStopGenerating}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 8,
+                    padding: '8px 20px',
+                    background: '#ef4444',
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: 8,
+                    fontSize: 12,
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.05em',
+                  }}
+                >
+                  <StopCircle size={16} />
+                  Stop
+                </button>
+              ) : (
+                <button
+                  onClick={handleGenerateAll}
+                  disabled={products.length === 0}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 8,
+                    padding: '8px 20px',
+                    background: '#10b981',
+                    color: '#000',
+                    border: 'none',
+                    borderRadius: 8,
+                    fontSize: 12,
+                    fontWeight: 700,
+                    cursor: products.length === 0 ? 'not-allowed' : 'pointer',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.05em',
+                  }}
+                >
+                  <Sparkles size={16} />
+                  Generate All
+                </button>
+              )}
               <button
                 onClick={() => setSpreadsheetId(null)}
                 style={{
