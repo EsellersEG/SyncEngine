@@ -792,6 +792,9 @@ export default function SyncPage() {
                         <span style={{ color: '#f87171' }}>✗{job.failed_count}</span>
                         {job.skipped_count > 0 && <span style={{ color: '#fbbf24' }}>⊘{job.skipped_count}</span>}
                         <span style={{ color: '#64748b', marginLeft: 'auto' }}>{job.created_count + job.updated_count + job.failed_count + job.skipped_count}/{job.total_products}</span>
+                        {(job.status === 'completed' || job.status === 'failed') && job.started_at && (
+                          <span style={{ color: '#a78bfa', fontFamily: 'var(--font-mono)' }}>⏱ {getDuration(job)}</span>
+                        )}
                       </div>
                     </div>
                   )}
