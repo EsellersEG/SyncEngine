@@ -10,6 +10,7 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  // Expose VITE_ prefixed env vars automatically; GEMINI API key loaded via VITE_GEMINI_API_KEY
   server: {
     port: 5173,
     proxy: {

@@ -2,8 +2,13 @@ import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import {
   LayoutDashboard, Users, Database, Zap, Settings,
-  GitBranch, ShoppingBag, Map, Package, LogOut, Activity, FileText, ClipboardList
+  GitBranch, ShoppingBag, Map, Package, LogOut, Activity, FileText, ClipboardList,
+  Wrench, Sparkles
 } from 'lucide-react';
+
+const toolItems = [
+  { to: '/tools/marketplace-content', icon: Sparkles, label: 'Marketplace Content' },
+];
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard', end: true, roles: ['admin', 'employee', 'client'] },
@@ -82,6 +87,29 @@ export default function Layout() {
                 color: isActive ? '#ffa500' : '#64748b',
                 background: isActive ? 'rgba(255,165,0,0.1)' : 'transparent',
                 border: isActive ? '1px solid rgba(255,165,0,0.2)' : '1px solid transparent',
+              })}
+            >
+              <item.icon size={16} />
+              {item.label}
+            </NavLink>
+          ))}
+
+          {/* ── E-sellers Tools ── */}
+          <div style={{ fontSize: 11, fontWeight: 600, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.08em', padding: '12px 8px 8px', marginTop: 8, borderTop: '1px solid rgba(255,165,0,0.1)', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <Wrench size={11} style={{ color: '#10b981' }} /> E-sellers Tools
+          </div>
+          {toolItems.map(item => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              style={({ isActive }) => ({
+                display: 'flex', alignItems: 'center', gap: 10,
+                padding: '9px 12px', borderRadius: 10, marginBottom: 2,
+                fontSize: 14, fontWeight: 500, textDecoration: 'none',
+                transition: 'all 0.2s',
+                color: isActive ? '#10b981' : '#64748b',
+                background: isActive ? 'rgba(16,185,129,0.1)' : 'transparent',
+                border: isActive ? '1px solid rgba(16,185,129,0.2)' : '1px solid transparent',
               })}
             >
               <item.icon size={16} />
