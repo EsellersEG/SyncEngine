@@ -52,25 +52,34 @@ function buildGroupPrompt(representative: Record<string, any>, variantSummary: s
   const brand = getBrand(representative);
   const model = getModel(representative);
 
+  // Remove variant-specific fields so AI doesn't reference them
+  const genericProduct = { ...trimmed };
+  delete genericProduct.Color; delete genericProduct.color; delete genericProduct.COLOR; delete genericProduct.Colour;
+  delete genericProduct.Size; delete genericProduct.size; delete genericProduct.SIZE;
+  delete genericProduct.SKU; delete genericProduct.sku;
+  delete genericProduct['International Barcode']; delete genericProduct.barcode;
+
   return `You are an expert e-commerce copywriter for Amazon and Noon UAE/KSA.
 
 PRODUCT DATA (from spreadsheet with columns: ${headers.join(', ')}):
-${JSON.stringify(trimmed, null, 2)}
+${JSON.stringify(genericProduct, null, 2)}
 
-This product group has these variants (different Color/Size only):
+This product has ${variantSummary.split('\n').length} variants (they differ ONLY in Color and/or Size):
 ${variantSummary}
 
 CRITICAL RULES:
-- The brand is EXACTLY "${brand}" — use this EXACT spelling, do NOT change it.
+- The brand is EXACTLY "${brand}" — use this EXACT spelling, do NOT change it, do NOT abbreviate it, do NOT use a different brand name.
 - The model is EXACTLY "${model}" — use this EXACT spelling.
-- ALL variants share the SAME Title template, Description, and Bullet Points.
-- Only Color and Size differ per variant.
+- You are generating ONE shared template for ALL variants.
+- The Title, Description, and Bullet Points MUST be 100% identical for every variant.
+- NEVER mention any specific color, colour, shade, or size anywhere — not in the title, not in the description, not in the bullet points.
+- I will append Color and Size to each variant's title myself.
 
 TITLE FORMAT (use "|" as separator, NOT "-"):
 [Brand] | [Model] | [Department/Target Audience] | [Product Type] | [Key Feature 1] | [Key Feature 2] | [Key Feature 3]
 
 IMPORTANT: Do NOT include Color or Size in the title. I will append those myself per variant.
-Example: "Reebokwork | IB3484 | Men's | Safety Work Shoe | Composite Toe | Slip-Resistant | Water-Resistant"
+Example: "${brand} | ${model} | Men's | Safety Work Shoe | Composite Toe | Slip-Resistant | Water-Resistant"
 
 TITLE RULES:
 - Character limit: 80-200 characters (without color/size suffix).
@@ -81,12 +90,19 @@ TITLE RULES:
 - NO ALL CAPS.
 - Use abbreviations: "cm", "oz", "in", "kg".
 
-DESCRIPTION & BULLETS:
-- Description: Concise, engaging, performance-focused. 150-300 words.
-- Bullets: Exactly 5 highly informative bullet points.
-- Do NOT mention specific color or size in description or bullets (keep them generic for all variants).
+DESCRIPTION RULES:
+- Concise, engaging, performance-focused. 150-300 words.
+- MUST be generic — applies equally to ALL variants regardless of color or size.
+- NEVER reference any specific color or size. Say "available in multiple colors and sizes" if needed.
+
+BULLET POINTS RULES:
+- Exactly 5 highly informative bullet points.
+- MUST be generic — applies equally to ALL variants regardless of color or size.
+- NEVER reference any specific color or size.
+- Focus on: materials, safety features, comfort, certifications, use cases.
 
 OUTPUT in both English (EN) and Arabic (AR). Arabic must be professional and optimized for GCC markets.
+The Arabic description and bullets must also be 100% generic (no color/size references).
 
 Return ONLY this JSON:
 {
