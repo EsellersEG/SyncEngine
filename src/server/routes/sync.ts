@@ -149,7 +149,7 @@ router.post('/start', async (req: AuthRequest, res) => {
         priceAdjustmentPercent,
         priceRoundingMode,
         warehouseName: resolvedWarehouseName,
-        workers: workers ? Math.min(Math.max(1, parseInt(String(workers), 10) || 1), 10) : 1,
+        workers: (workers && effectivePreset === 'price_stock_meta') ? Math.min(Math.max(1, parseInt(String(workers), 10) || 1), 10) : 1,
       }).catch(err => {
         console.error(`[SyncRoute] Job ${jobId} crashed:`, err);
       });

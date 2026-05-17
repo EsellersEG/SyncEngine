@@ -905,7 +905,7 @@ export default function SyncPage() {
             {(() => {
               const selectedCh = channels.find(ch => ch.id === config.channel_id);
               if (selectedCh?.type !== 'shopify') return null;
-              if (config.preset !== 'price_stock_meta' && config.preset !== 'sync_all') return null;
+              if (config.preset !== 'price_stock_meta') return null;
               return (
                 <div style={{
                   padding: '12px 14px', borderRadius: 10,
