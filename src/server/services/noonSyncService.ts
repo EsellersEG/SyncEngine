@@ -136,6 +136,16 @@ export async function runNoonSyncJob(config: NoonSyncJobConfig): Promise<void> {
       || preset === 'price_stock_meta'
       || (preset === 'custom' && customFields.includes('price'));
 
+    // Abort early if no Noon-supported fields are selected
+    if (!syncStock && !syncPrice) {
+      const unsupported = customFields.filter(f => f !== 'stock' && f !== 'price');
+      const msg = unsupported.length > 0
+        ? `Noon API does not support syncing: ${unsupported.join(', ')}. Only Stock and Price are available via the Noon API. Use Content Export for title/image/description updates.`
+        : 'No syncable fields selected for Noon. Please include Stock and/or Price.';
+      await failJob(jobId, msg);
+      return;
+    }
+
     // Process in batches
     for (let i = 0; i < products.length; i += BATCH_SIZE) {
       // Time check
@@ -201,7 +211,12 @@ export async function runNoonSyncJob(config: NoonSyncJobConfig): Promise<void> {
             }));
 
             await noonApiRequest(credentials, countryCode, 'POST', '/pricing/v1/pricing/upsert', {
-              items: cleanPayload.map(p => ({ partner_sku: p.partnerSku, country_code: countryCode.toLowerCase(), price: p.price, msrp: p.msrp })),
+              items: cleanPayload.map(p => ({
+                partner_sku: p.partnerSku,
+                price: p.price,
+                ...(p.msrp ? { msrp: p.msrp } : {}),
+                ...(p.salePrice ? { sale_price: p.salePrice } : {}),
+              })),
             });
 
             for (const update of priceUpdates) {
