@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { api } from '../lib/api';
 import { useAuth } from '../hooks/useAuth';
-import { Zap, Play, XCircle, RefreshCw, CheckCircle, AlertTriangle, Clock, ChevronDown, ChevronUp, Plus, Trash2, Filter, ArrowLeft, Eye, Download } from 'lucide-react';
+import { Zap, Play, XCircle, RefreshCw, CheckCircle, AlertTriangle, Clock, ChevronDown, ChevronUp, Plus, Trash2, Filter, ArrowLeft, Eye, Download, FileText } from 'lucide-react';
 
 interface Channel { id: string; name: string; type: string; client_id: string; }
 interface Feed { id: string; name: string; client_id: string; type?: string; }
@@ -15,6 +15,11 @@ interface SyncJob {
 interface SyncLog {
   id: string; sku: string; action: string; message: string; created_at: string;
   details?: { stock_from?: number | null; stock_to?: number | null; price_from?: string | null; price_to?: string | null; warehouse_name?: string | null };
+}
+interface ContentJob {
+  id: string; channel_id: string; feed_id: string; status: string;
+  total_products: number; processed_count: number; updated_count: number;
+  error_message?: string; created_at: string; completed_at?: string;
 }
 interface FilterRule {
   field: string; operator: string; value: string; logic?: string;
@@ -57,7 +62,7 @@ const OPERATORS = [
   { value: 'is_not_empty', label: 'Is Not Empty' },
 ];
 
-type View = 'main' | 'history' | 'validation' | 'filter-rules';
+type View = 'main' | 'history' | 'validation' | 'filter-rules' | 'content';
 
 export default function SyncPage() {
   const { user, isClient } = useAuth();
@@ -68,6 +73,12 @@ export default function SyncPage() {
   const [starting, setStarting] = useState(false);
   const [view, setView] = useState<View>('main');
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Content sync state
+  const [contentJobs, setContentJobs] = useState<ContentJob[]>([]);
+  const [contentStarting, setContentStarting] = useState(false);
+  const [contentConfig, setContentConfig] = useState({ channel_id: '', feed_id: '' });
+  const contentPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Sync config
   const [config, setConfig] = useState({ channel_id: '', feed_id: '', preset: 'sync_all' });
@@ -206,6 +217,21 @@ export default function SyncPage() {
 
   useEffect(() => { fetchValidationLogs(); }, [fetchValidationLogs]);
 
+  // Poll content jobs while in content view
+  useEffect(() => {
+    if (view !== 'content' || !contentConfig.channel_id) return;
+    const channelId = contentConfig.channel_id;
+    const load = async () => {
+      try {
+        const jobs = await api.get(`/noon/content/jobs?channel_id=${channelId}`) as ContentJob[];
+        setContentJobs(jobs);
+      } catch { /* ignore */ }
+    };
+    load();
+    const timer = setInterval(load, 4000);
+    return () => clearInterval(timer);
+  }, [view, contentConfig.channel_id]);
+
   function toggleCustomField(field: string) {
     setCustomFields(prev => prev.includes(field) ? prev.filter(f => f !== field) : [...prev, field]);
   }
@@ -220,6 +246,48 @@ export default function SyncPage() {
 
   function removeRule(index: number) {
     setFilterRules(prev => prev.filter((_, i) => i !== index));
+  }
+
+  async function loadContentJobs(channelId: string) {
+    if (!channelId) return;
+    try {
+      const jobs = await api.get(`/noon/content/jobs?channel_id=${channelId}`) as ContentJob[];
+      setContentJobs(jobs);
+    } catch { /* ignore */ }
+  }
+
+  async function handleContentSync(e: React.FormEvent) {
+    e.preventDefault();
+    setContentStarting(true);
+    try {
+      await api.post('/noon/content/start', { channel_id: contentConfig.channel_id, feed_id: contentConfig.feed_id });
+      await loadContentJobs(contentConfig.channel_id);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to start content sync');
+    } finally {
+      setContentStarting(false);
+    }
+  }
+
+  async function handleDownloadContentCSV(jobId: string, channelName: string) {
+    try {
+      const token = localStorage.getItem('sync_engine_token');
+      const res = await fetch(`/api/noon/content/${jobId}/download`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) { alert('Download failed'); return; }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `noon-content-${channelName}-${jobId}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      alert('Download failed: ' + (err instanceof Error ? err.message : String(err)));
+    }
   }
 
   const shopifyChannels = channels.filter(ch => ch.type === 'shopify' || ch.type === 'noon' || ch.type === 'amazon');
@@ -570,6 +638,127 @@ export default function SyncPage() {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
+  // VIEW: Noon Content Sync
+  // ─────────────────────────────────────────────────────────────────────────
+  if (view === 'content') {
+    const noonChannels = channels.filter(ch => ch.type === 'noon');
+    return (
+      <div className="animate-fade-in">
+        <div className="page-header">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <button className="btn btn-secondary btn-sm btn-icon" onClick={() => {
+              if (contentPollRef.current) clearInterval(contentPollRef.current);
+              setView('main');
+            }}><ArrowLeft size={14} /></button>
+            <div>
+              <h1 className="page-title">🌙 Noon Content Sync</h1>
+              <p className="page-subtitle">Generate & download catalog content CSV for Noon Seller Lab</p>
+            </div>
+          </div>
+        </div>
+        <div className="page-body" style={{ display: 'grid', gridTemplateColumns: '380px 1fr', gap: 24, alignItems: 'flex-start' }}>
+          {/* Left: Generate */}
+          <div className="glass-card" style={{ padding: 24 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
+              <div style={{ width: 36, height: 36, borderRadius: 10, background: 'linear-gradient(135deg, #4f6ef7, #7c3aed)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>🌙</div>
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: '#e2e8f0' }}>Generate Content CSV</div>
+                <div style={{ fontSize: 12, color: '#64748b' }}>Builds upload file from your attribute mappings</div>
+              </div>
+            </div>
+            <form onSubmit={handleContentSync} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <div className="form-group">
+                <label className="label">Noon Channel</label>
+                <select className="input" value={contentConfig.channel_id}
+                  onChange={e => { setContentConfig(c => ({ ...c, channel_id: e.target.value, feed_id: '' })); loadContentJobs(e.target.value); }}
+                  required>
+                  <option value="">Select Noon channel...</option>
+                  {noonChannels.map(ch => <option key={ch.id} value={ch.id}>🌙 {ch.name}</option>)}
+                </select>
+              </div>
+              <div className="form-group">
+                <label className="label">Feed</label>
+                <select className="input" value={contentConfig.feed_id}
+                  onChange={e => setContentConfig(c => ({ ...c, feed_id: e.target.value }))}
+                  required>
+                  <option value="">Select feed...</option>
+                  {feeds.filter(f => !contentConfig.channel_id || channels.find(ch => ch.id === contentConfig.channel_id)?.client_id === f.client_id).map(f => (
+                    <option key={f.id} value={f.id}>{f.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div style={{ background: 'rgba(79,110,247,0.06)', border: '1px solid rgba(79,110,247,0.15)', borderRadius: 10, padding: '12px 14px', fontSize: 12, color: '#94a3b8', lineHeight: 1.6 }}>
+                <strong style={{ color: '#a5b4fc' }}>How it works:</strong> Reads your feed products, applies attribute mappings (title, brand, bullet points, images, search keywords), and generates a ready-to-upload CSV. Upload it in Noon Seller Lab under <em>Catalog → Import Catalog</em>.
+              </div>
+              <button type="submit" className="btn btn-primary"
+                disabled={contentStarting || !contentConfig.channel_id || !contentConfig.feed_id}
+                style={{ marginTop: 4 }}>
+                {contentStarting ? (
+                  <span className="spinner" style={{ width: 14, height: 14, border: '2px solid rgba(255,255,255,0.3)', borderTopColor: 'white', borderRadius: '50%', display: 'inline-block' }} />
+                ) : <FileText size={14} />}
+                {contentStarting ? 'Generating...' : 'Generate CSV'}
+              </button>
+            </form>
+          </div>
+
+          {/* Right: Jobs */}
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: '#e2e8f0', marginBottom: 16 }}>Content Jobs</div>
+            {contentJobs.length === 0 ? (
+              <div className="glass-card" style={{ padding: 48, textAlign: 'center' }}>
+                <FileText size={32} color="#334155" style={{ margin: '0 auto 12px' }} />
+                <p style={{ color: '#475569', fontSize: 14 }}>No content jobs yet. Select a channel and generate your first CSV.</p>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {contentJobs.map(job => {
+                  const ch = channels.find(c => c.id === job.channel_id);
+                  const fd = feeds.find(f => f.id === job.feed_id);
+                  const isDone = job.status === 'completed';
+                  const isFailed = job.status === 'failed';
+                  const isActive = job.status === 'exporting' || job.status === 'processing';
+                  return (
+                    <div key={job.id} className="glass-card" style={{ padding: '16px 20px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          {isDone ? <CheckCircle size={14} color="#4ade80" /> :
+                           isFailed ? <AlertTriangle size={14} color="#f87171" /> :
+                           <RefreshCw size={14} color="#60a5fa" className="spinner" />}
+                          <div>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: '#e2e8f0' }}>{ch?.name || job.channel_id}</div>
+                            <div style={{ fontSize: 11, color: '#64748b' }}>{fd?.name || job.feed_id} · {new Date(job.created_at).toLocaleString()}</div>
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span className={`badge ${isDone ? 'badge-success' : isFailed ? 'badge-danger' : isActive ? 'badge-info' : 'badge-muted'}`}>{job.status}</span>
+                          {isDone && (
+                            <button className="btn btn-primary btn-sm" style={{ padding: '4px 10px', fontSize: 12 }}
+                              onClick={() => handleDownloadContentCSV(job.id, ch?.name || 'noon')}>
+                              <Download size={11} /> Download CSV
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      {(job.total_products > 0 || isFailed) && (
+                        <div style={{ marginTop: 6, fontSize: 11, color: '#64748b' }}>
+                          {isFailed
+                            ? <span style={{ color: '#f87171' }}>{job.error_message}</span>
+                            : <span>{job.processed_count}/{job.total_products} products · {job.updated_count} rows mapped</span>
+                          }
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
   // VIEW: Main (Start Sync + Job List)
   // ─────────────────────────────────────────────────────────────────────────
   return (
@@ -587,6 +776,17 @@ export default function SyncPage() {
           <button className="btn btn-secondary btn-sm" onClick={() => setView('validation')}>
             <Eye size={13} /> Sync Validation
           </button>
+          {channels.some(ch => ch.type === 'noon') && (
+            <button className="btn btn-secondary btn-sm" style={{ borderColor: 'rgba(99,102,241,0.4)', color: '#a5b4fc' }}
+              onClick={() => {
+                const noonChannelId = config.channel_id && channels.find(ch => ch.id === config.channel_id && ch.type === 'noon') ? config.channel_id : '';
+                setContentConfig({ channel_id: noonChannelId, feed_id: noonChannelId ? config.feed_id : '' });
+                if (noonChannelId) loadContentJobs(noonChannelId);
+                setView('content');
+              }}>
+              <FileText size={13} /> Content Sync
+            </button>
+          )}
         </div>
       </div>
 
