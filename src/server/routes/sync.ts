@@ -11,7 +11,7 @@ router.use(authenticate);
 // POST /api/sync/start — kick off a sync job
 router.post('/start', async (req: AuthRequest, res) => {
   try {
-    const { channel_id, feed_id, preset = 'sync_all', fields, filter_rules, include_images } = req.body;
+    const { channel_id, feed_id, preset = 'sync_all', fields, filter_rules, include_images, workers } = req.body;
     if (!channel_id || !feed_id) {
       return res.status(400).json({ error: 'channel_id and feed_id required' });
     }
@@ -149,6 +149,7 @@ router.post('/start', async (req: AuthRequest, res) => {
         priceAdjustmentPercent,
         priceRoundingMode,
         warehouseName: resolvedWarehouseName,
+        workers: workers ? Math.min(Math.max(1, parseInt(String(workers), 10) || 1), 10) : 1,
       }).catch(err => {
         console.error(`[SyncRoute] Job ${jobId} crashed:`, err);
       });

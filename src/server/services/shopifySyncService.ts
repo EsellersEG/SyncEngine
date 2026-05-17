@@ -32,6 +32,7 @@ interface SyncJobConfig {
   priceAdjustmentPercent?: number;
   priceRoundingMode?: 'none' | 'up' | 'down';
   warehouseName?: string;
+  workers?: number; // Parallel workers (1–10), only for price_stock_meta
 }
 
 interface ProductRow {
@@ -555,6 +556,42 @@ async function getShopifyProductMapForSKUs(
   return map;
 }
 
+// ── Turbo worker: runs one partition of products in batches ──────────────
+async function runTurboWorker(
+  channel: Channel,
+  products: ProductRow[],
+  mappings: AttributeMapping[],
+  metafieldMappings: AttributeMapping[],
+  shopifyMap: Map<string, { productId: string; variantId: string; inventoryItemId: string; price?: string; inventoryQuantity?: number }>,
+  jobId: string,
+  locationId: string | undefined,
+  priceAdjustmentPercent: number,
+  priceRoundingMode: 'none' | 'up' | 'down',
+  warehouseName: string | undefined,
+  shopifyDefs: Map<string, string>,
+  workerIdx: number
+) {
+  for (let i = 0; i < products.length; i += TURBO_BATCH_SIZE) {
+    if (await isJobCancelled(jobId)) {
+      console.log(`[Worker-${workerIdx}] Job ${jobId} cancelled at product ${i}/${products.length}`);
+      return;
+    }
+    const batch = products.slice(i, i + TURBO_BATCH_SIZE);
+    const results = await Promise.all(
+      batch.map(p => syncProductTurbo(channel, p, mappings, metafieldMappings, shopifyMap, jobId, locationId, 0, priceAdjustmentPercent, priceRoundingMode, warehouseName, shopifyDefs))
+    );
+    const updated = results.filter(r => r === 'updated').length;
+    const skipped = results.filter(r => r === 'skipped').length;
+    const failed = results.filter(r => r === 'failed').length;
+    // Atomic increment — safe for parallel workers
+    await query(
+      'UPDATE sync_jobs SET processed_count = processed_count + $1, updated_count = updated_count + $2, skipped_count = skipped_count + $3, failed_count = failed_count + $4 WHERE id = $5',
+      [batch.length, updated, skipped, failed, jobId]
+    );
+    console.log(`[Worker-${workerIdx}] batch ${i + batch.length}/${products.length} — +${updated} updated, ⊘${skipped} skipped, ✗${failed} failed`);
+  }
+}
+
 // ── Turbo Mode: parallel price/stock updates ──────────────────────────────
 async function turboSync(
   channel: Channel,
@@ -563,7 +600,8 @@ async function turboSync(
   jobId: string,
   priceAdjustmentPercent = 0,
   priceRoundingMode: 'none' | 'up' | 'down' = 'none',
-  warehouseName?: string
+  warehouseName?: string,
+  workers = 1
 ) {
   const shopifyMap = products.length <= 50
     ? await getShopifyProductMapForSKUs(channel, products.map(p => p.sku))
@@ -576,7 +614,7 @@ async function turboSync(
     const locData = await shopifyGraphQL(channel, locQuery) as { locations: { edges: Array<{ node: { id: string } }> } };
     locationId = locData.locations.edges[0]?.node?.id;
   }
-  console.log(`[SyncFlow] Turbo: locationId=${locationId || 'NONE'}, products=${products.length}`);
+  console.log(`[SyncFlow] Turbo: locationId=${locationId || 'NONE'}, products=${products.length}, workers=${workers}`);
 
   // Pre-compute metafield mappings
   const metafieldMappings = mappings.filter(m => m.target_field.startsWith('metafield:'));
@@ -584,24 +622,25 @@ async function turboSync(
   // Fetch Shopify metafield definitions for auto-type detection
   const shopifyDefs = metafieldMappings.length > 0 ? await getMetafieldDefinitions(channel) : new Map<string, string>();
 
-  for (let i = 0; i < products.length; i += TURBO_BATCH_SIZE) {
-    if (await isJobCancelled(jobId)) {
-      console.log(`[SyncFlow] Job ${jobId} cancelled at product ${i}/${products.length}`);
-      return;
+  if (workers > 1) {
+    // Split products into N equal partitions, run all workers concurrently
+    const effectiveWorkers = Math.min(workers, products.length, 10);
+    const chunkSize = Math.ceil(products.length / effectiveWorkers);
+    const chunks: ProductRow[][] = [];
+    for (let i = 0; i < products.length; i += chunkSize) {
+      chunks.push(products.slice(i, i + chunkSize));
     }
-
-    const batch = products.slice(i, i + TURBO_BATCH_SIZE);
-    const results = await Promise.all(batch.map(p => syncProductTurbo(channel, p, mappings, metafieldMappings, shopifyMap, jobId, locationId, 0, priceAdjustmentPercent, priceRoundingMode, warehouseName, shopifyDefs)));
-
-    // Batch counter update (one DB call per batch instead of per product)
-    const updated = results.filter(r => r === 'updated').length;
-    const skipped = results.filter(r => r === 'skipped').length;
-    const failed = results.filter(r => r === 'failed').length;
-    await query(
-      'UPDATE sync_jobs SET processed_count = $1, updated_count = updated_count + $2, skipped_count = skipped_count + $3, failed_count = failed_count + $4 WHERE id = $5',
-      [Math.min(i + TURBO_BATCH_SIZE, products.length), updated, skipped, failed, jobId]
+    console.log(`[SyncFlow] Parallel workers: ${chunks.length} × ~${chunkSize} products`);
+    await Promise.allSettled(
+      chunks.map((chunk, idx) =>
+        runTurboWorker(channel, chunk, mappings, metafieldMappings, shopifyMap, jobId, locationId, priceAdjustmentPercent, priceRoundingMode, warehouseName, shopifyDefs, idx)
+      )
     );
+    return;
   }
+
+  // Single-worker path (default)
+  await runTurboWorker(channel, products, mappings, metafieldMappings, shopifyMap, jobId, locationId, priceAdjustmentPercent, priceRoundingMode, warehouseName, shopifyDefs, 0);
 }
 
 async function syncProductTurbo(
@@ -2323,8 +2362,9 @@ export async function runSyncJob(config: SyncJobConfig) {
 
     if (preset === 'price_stock_meta' || (config.fields && config.fields.every(f => ['price', 'stock', 'metafields'].includes(f)))) {
       // Always use turboSync — Shopify bulk ops silently drop metafield updates
-      console.log(`[SyncFlow] Pathway: TURBO (${products.length} products, metafields need direct GraphQL)`);
-      await turboSync(channel, products, mappings, jobId, priceAdjustmentPercent, priceRoundingMode, warehouseName);
+      const workers = Math.min(Math.max(1, config.workers || 1), 10);
+      console.log(`[SyncFlow] Pathway: TURBO (${products.length} products, metafields need direct GraphQL, workers=${workers})`);
+      await turboSync(channel, products, mappings, jobId, priceAdjustmentPercent, priceRoundingMode, warehouseName, workers);
     } else {
       if (products.length > BULK_SYNC_THRESHOLD) {
         console.log(`[SyncFlow] Pathway: BULK ULTRA (${products.length} products, ${preset})`);

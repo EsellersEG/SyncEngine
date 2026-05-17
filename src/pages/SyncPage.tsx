@@ -88,6 +88,7 @@ export default function SyncPage() {
   const [filterPreview, setFilterPreview] = useState<{ total: number; matched: number; filtered: number } | null>(null);
   const [mappingCount, setMappingCount] = useState<number | null>(null);
   const [includeImages, setIncludeImages] = useState(false);
+  const [workers, setWorkers] = useState(1);
 
   // History state
   const [historyJobs, setHistoryJobs] = useState<SyncJob[]>([]);
@@ -150,6 +151,7 @@ export default function SyncPage() {
       // Include images toggle for Shopify and Amazon
       const selectedCh = channels.find(ch => ch.id === config.channel_id);
       if ((selectedCh?.type === 'amazon' || selectedCh?.type === 'shopify') && includeImages) body.include_images = true;
+      if (selectedCh?.type === 'shopify' && workers > 1) body.workers = workers;
       await api.post('/sync/start', body);
       const updated = await api.get('/sync/jobs?limit=50') as SyncJob[];
       setJobs(updated);
@@ -897,6 +899,43 @@ export default function SyncPage() {
                   </div>
                 </label>
               ) : null;
+            })()}
+
+            {/* Parallel Workers (Shopify price_stock_meta only) */}
+            {(() => {
+              const selectedCh = channels.find(ch => ch.id === config.channel_id);
+              if (selectedCh?.type !== 'shopify') return null;
+              if (config.preset !== 'price_stock_meta' && config.preset !== 'sync_all') return null;
+              return (
+                <div style={{
+                  padding: '12px 14px', borderRadius: 10,
+                  border: `1px solid ${workers > 1 ? 'rgba(79,110,247,0.4)' : 'rgba(79,110,247,0.1)'}`,
+                  background: workers > 1 ? 'rgba(79,110,247,0.07)' : 'transparent',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: '#e2e8f0' }}>⚡ Parallel Workers</div>
+                      <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>Split products across multiple concurrent workers</div>
+                    </div>
+                    <div style={{ fontSize: 22, fontWeight: 700, color: workers > 1 ? '#818cf8' : '#475569', minWidth: 28, textAlign: 'right' }}>{workers}x</div>
+                  </div>
+                  <input
+                    type="range" min={1} max={10} step={1} value={workers}
+                    onChange={e => setWorkers(parseInt(e.target.value, 10))}
+                    style={{ width: '100%', accentColor: '#4f6ef7' }}
+                  />
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#475569', marginTop: 2 }}>
+                    <span>1x (default)</span>
+                    <span style={{ color: '#60a5fa' }}>~3–4× faster at 10x</span>
+                    <span>10x</span>
+                  </div>
+                  {workers > 1 && (
+                    <div style={{ marginTop: 8, fontSize: 11, color: '#94a3b8', lineHeight: 1.5 }}>
+                      Splits {workers > 1 ? 'products into ' + workers + ' equal groups' : ''} — workers share Shopify’s rate limit, so speedup is ~3–4×, not {workers}×.
+                    </div>
+                  )}
+                </div>
+              );
             })()}
 
             {/* No Mapping Warning */}
