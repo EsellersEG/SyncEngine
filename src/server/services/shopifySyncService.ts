@@ -2566,21 +2566,69 @@ export async function runSyncJob(config: SyncJobConfig) {
     console.log(`[SyncFlow] Job ${jobId} | Preset: ${preset} | Products: ${products.length} | Images: ${withImages}`);
 
     if (preset === 'price_stock_meta' || (config.fields && config.fields.every(f => ['price', 'stock', 'metafields'].includes(f)))) {
-      if (products.length > BULK_SYNC_THRESHOLD) {
-        // Bulk JSONL for price+stock, then batched metafieldsSet for metafields
-        console.log(`[SyncFlow] Pathway: BULK + metafieldsSet (${products.length} products, price_stock_meta)`);
-        try {
-          await bulkSync(channel, products, mappings, jobId, false, false, priceAdjustmentPercent, priceRoundingMode, warehouseName);
-        } catch (bulkErr) {
-          console.error('[SyncFlow] Bulk sync failed, falling back to turbo:', bulkErr);
-          const workers = Math.min(Math.max(1, config.workers || 1), 10);
-          await turboSync(channel, products, mappings, jobId, priceAdjustmentPercent, priceRoundingMode, warehouseName, workers);
+      // Optimized: Turbo for price+stock (no metafields per-product), then batched metafieldsSet
+      const workers = Math.min(Math.max(1, config.workers || 1), 10);
+      const metafieldMappings = mappings.filter(m => m.target_field.startsWith('metafield:'));
+      const nonMetafieldMappings = mappings.filter(m => !m.target_field.startsWith('metafield:'));
+
+      // Phase 1: Turbo sync for price + stock only (2 calls per product instead of 3)
+      console.log(`[SyncFlow] Pathway: TURBO+BATCH (${products.length} products, workers=${workers}, metafields batched separately)`);
+      await turboSync(channel, products, nonMetafieldMappings, jobId, priceAdjustmentPercent, priceRoundingMode, warehouseName, workers);
+
+      // Phase 2: Batched metafieldsSet (25 per call instead of 1 per product)
+      if (metafieldMappings.length > 0 && !await isJobCancelled(jobId)) {
+        const METAFIELD_BATCH_SIZE = 25;
+        const shopifyMap = await getShopifyProductMap(channel);
+        const shopifyDefs = await getMetafieldDefinitions(channel);
+
+        const allMetafieldInputs: Array<{ ownerId: string; namespace: string; key: string; type: string; value: string }> = [];
+        for (const product of products) {
+          const ids = shopifyMap.get(product.sku);
+          if (!ids) continue;
+          const metafields = buildMetafields(product.raw_data, metafieldMappings, shopifyDefs);
+          for (const mf of metafields) {
+            allMetafieldInputs.push({
+              ownerId: ids.productId,
+              namespace: mf.namespace,
+              key: mf.key,
+              type: mf.type,
+              value: mf.value,
+            });
+          }
         }
-      } else {
-        // Small batch: use turbo (direct GraphQL per product)
-        const workers = Math.min(Math.max(1, config.workers || 1), 10);
-        console.log(`[SyncFlow] Pathway: TURBO (${products.length} products, workers=${workers})`);
-        await turboSync(channel, products, mappings, jobId, priceAdjustmentPercent, priceRoundingMode, warehouseName, workers);
+
+        console.log(`[SyncFlow] metafieldsSet: ${allMetafieldInputs.length} entries → ${Math.ceil(allMetafieldInputs.length / METAFIELD_BATCH_SIZE)} batches`);
+
+        const metafieldsSetMutation = `
+          mutation metafieldsSet($metafields: [MetafieldsSetInput!]!) {
+            metafieldsSet(metafields: $metafields) {
+              metafields { id }
+              userErrors { field message code }
+            }
+          }`;
+
+        let mfSuccess = 0;
+        let mfFailed = 0;
+        for (let mi = 0; mi < allMetafieldInputs.length; mi += METAFIELD_BATCH_SIZE) {
+          if (await isJobCancelled(jobId)) break;
+          const batch = allMetafieldInputs.slice(mi, mi + METAFIELD_BATCH_SIZE);
+          try {
+            const result = await shopifyGraphQL(channel, metafieldsSetMutation, { metafields: batch }) as {
+              metafieldsSet: { metafields?: Array<{ id: string }>; userErrors?: Array<{ field: string; message: string; code: string }> };
+            };
+            const errs = result.metafieldsSet.userErrors;
+            if (errs && errs.length > 0) {
+              mfFailed += batch.length;
+              console.warn(`[SyncFlow] metafieldsSet batch ${Math.floor(mi / METAFIELD_BATCH_SIZE) + 1} errors:`, errs.slice(0, 3));
+            } else {
+              mfSuccess += batch.length;
+            }
+          } catch (err) {
+            mfFailed += batch.length;
+            console.warn(`[SyncFlow] metafieldsSet batch failed:`, err);
+          }
+        }
+        console.log(`[SyncFlow] Metafield batching complete: ${mfSuccess} ok, ${mfFailed} failed`);
       }
     } else {
       if (products.length > BULK_SYNC_THRESHOLD) {
