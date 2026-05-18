@@ -2396,37 +2396,60 @@ async function bulkSync(
     })));
   }
 
-  // ── Metafield follow-up: run turbo pass for metafield updates (bulk drops them) ──
+  // ── Metafield follow-up: batched metafieldsSet (25 per call instead of 1-per-product) ──
   if (hasMetafieldProducts && existingSingles.length > 0 && !await isJobCancelled(jobId)) {
-    console.log(`[SyncFlow] Metafield follow-up: ${existingSingles.length} products via turbo (bulk can't handle metafields)`);
-    // Only pass metafield mappings — skip price/stock/fields (already handled by bulk)
-    const metaOnlyMappings = metafieldMappings;
-    const metaBatchSize = TURBO_BATCH_SIZE;
-    for (let mi = 0; mi < existingSingles.length; mi += metaBatchSize) {
-      if (await isJobCancelled(jobId)) break;
-      const metaBatch = existingSingles.slice(mi, mi + metaBatchSize);
-      await Promise.all(metaBatch.map(async (product) => {
-        try {
-          const ids = shopifyMap.get(product.sku);
-          if (!ids) return;
-          const metafields = buildMetafields(product.raw_data, metaOnlyMappings, shopifyDefs);
-          if (metafields.length === 0) return;
-          const updateMutation = `
-            mutation productUpdate($input: ProductInput!) {
-              productUpdate(input: $input) {
-                product { id }
-                userErrors { field message }
-              }
-            }`;
-          await shopifyGraphQL(channel, updateMutation, {
-            input: { id: ids.productId, metafields },
-          });
-        } catch (err) {
-          console.warn(`[SyncFlow] Metafield update failed for ${product.sku}:`, err);
-        }
-      }));
+    console.log(`[SyncFlow] Metafield follow-up: ${existingSingles.length} products via batched metafieldsSet`);
+    const METAFIELD_BATCH_SIZE = 25;
+    const allMetafieldInputs: Array<{ ownerId: string; namespace: string; key: string; type: string; value: string }> = [];
+
+    // Collect all metafield inputs
+    for (const product of existingSingles) {
+      const ids = shopifyMap.get(product.sku);
+      if (!ids) continue;
+      const metafields = buildMetafields(product.raw_data, metafieldMappings, shopifyDefs);
+      for (const mf of metafields) {
+        allMetafieldInputs.push({
+          ownerId: ids.productId,
+          namespace: mf.namespace,
+          key: mf.key,
+          type: mf.type,
+          value: mf.value,
+        });
+      }
     }
-    console.log(`[SyncFlow] Metafield follow-up complete`);
+
+    console.log(`[SyncFlow] metafieldsSet: ${allMetafieldInputs.length} entries in ${Math.ceil(allMetafieldInputs.length / METAFIELD_BATCH_SIZE)} batches`);
+
+    const metafieldsSetMutation = `
+      mutation metafieldsSet($metafields: [MetafieldsSetInput!]!) {
+        metafieldsSet(metafields: $metafields) {
+          metafields { id }
+          userErrors { field message code }
+        }
+      }`;
+
+    let mfSuccess = 0;
+    let mfFailed = 0;
+    for (let mi = 0; mi < allMetafieldInputs.length; mi += METAFIELD_BATCH_SIZE) {
+      if (await isJobCancelled(jobId)) break;
+      const batch = allMetafieldInputs.slice(mi, mi + METAFIELD_BATCH_SIZE);
+      try {
+        const result = await shopifyGraphQL(channel, metafieldsSetMutation, { metafields: batch }) as {
+          metafieldsSet: { metafields?: Array<{ id: string }>; userErrors?: Array<{ field: string; message: string; code: string }> };
+        };
+        const errs = result.metafieldsSet.userErrors;
+        if (errs && errs.length > 0) {
+          mfFailed += batch.length;
+          console.warn(`[SyncFlow] metafieldsSet batch ${Math.floor(mi / METAFIELD_BATCH_SIZE) + 1} errors:`, errs.slice(0, 3));
+        } else {
+          mfSuccess += batch.length;
+        }
+      } catch (err) {
+        mfFailed += batch.length;
+        console.warn(`[SyncFlow] metafieldsSet batch failed:`, err);
+      }
+    }
+    console.log(`[SyncFlow] Metafield follow-up complete: ${mfSuccess} ok, ${mfFailed} failed`);
   }
 
   // ── Post-bulk: new products + variant groups (regular parallel API) ──
@@ -2543,10 +2566,22 @@ export async function runSyncJob(config: SyncJobConfig) {
     console.log(`[SyncFlow] Job ${jobId} | Preset: ${preset} | Products: ${products.length} | Images: ${withImages}`);
 
     if (preset === 'price_stock_meta' || (config.fields && config.fields.every(f => ['price', 'stock', 'metafields'].includes(f)))) {
-      // Always use turboSync — Shopify bulk ops silently drop metafield updates
-      const workers = Math.min(Math.max(1, config.workers || 1), 10);
-      console.log(`[SyncFlow] Pathway: TURBO (${products.length} products, metafields need direct GraphQL, workers=${workers})`);
-      await turboSync(channel, products, mappings, jobId, priceAdjustmentPercent, priceRoundingMode, warehouseName, workers);
+      if (products.length > BULK_SYNC_THRESHOLD) {
+        // Bulk JSONL for price+stock, then batched metafieldsSet for metafields
+        console.log(`[SyncFlow] Pathway: BULK + metafieldsSet (${products.length} products, price_stock_meta)`);
+        try {
+          await bulkSync(channel, products, mappings, jobId, false, false, priceAdjustmentPercent, priceRoundingMode, warehouseName);
+        } catch (bulkErr) {
+          console.error('[SyncFlow] Bulk sync failed, falling back to turbo:', bulkErr);
+          const workers = Math.min(Math.max(1, config.workers || 1), 10);
+          await turboSync(channel, products, mappings, jobId, priceAdjustmentPercent, priceRoundingMode, warehouseName, workers);
+        }
+      } else {
+        // Small batch: use turbo (direct GraphQL per product)
+        const workers = Math.min(Math.max(1, config.workers || 1), 10);
+        console.log(`[SyncFlow] Pathway: TURBO (${products.length} products, workers=${workers})`);
+        await turboSync(channel, products, mappings, jobId, priceAdjustmentPercent, priceRoundingMode, warehouseName, workers);
+      }
     } else {
       if (products.length > BULK_SYNC_THRESHOLD) {
         console.log(`[SyncFlow] Pathway: BULK ULTRA (${products.length} products, ${preset})`);
