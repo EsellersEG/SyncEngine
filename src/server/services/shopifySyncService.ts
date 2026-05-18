@@ -4,10 +4,10 @@
  * Execution pathways (auto-selected by product count):
  *  1. Turbo Mode        → parallel GraphQL mutations, price/stock/meta only (≤200 products)
  *  2. Ultra Mode        → 3-phase parallel: update existing + create new + variant groups (≤200 products)
- *  3. Bulk Sync         → Shopify Bulk Operations API via JSONL upload, NO rate limits (>200 products)
- *     - Uses productSet mutation: product + variant + price + stock ALL in one JSONL line per product
- *     - 2 sequential bulk ops: productSet (main) + inventoryItemUpdate (tracking/weight)
- *     - Falls back to Turbo/Ultra if bulk operations fail
+ *  3. Bulk Sync         → Hybrid bulk pipeline for large catalogs (>200 products)
+ *     - Existing single products use safe bulk product/variant/inventory updates plus batched stock/metafields
+ *     - New products and variant groups still use the regular parallel create/group flows
+ *     - Falls back to Turbo/Ultra if the hybrid bulk phase fails
  */
 
 import { query } from '../db.js';
@@ -2157,6 +2157,21 @@ async function downloadBulkResults(
           continue;
         }
 
+        // productUpdate results
+        const productUpdate = data?.productUpdate;
+        if (productUpdate) {
+          const userErrors = productUpdate.userErrors || [];
+          if (userErrors.length > 0) {
+            failed++;
+            for (const err of userErrors) {
+              if (errors.length < 20) errors.push({ message: `${err.field?.join?.('.') || ''}: ${err.message}` });
+            }
+          } else {
+            updated++;
+          }
+          continue;
+        }
+
         // productSet results
         const productSet = data?.productSet;
         if (productSet) {
@@ -2251,12 +2266,14 @@ async function bulkSync(
 
   console.log(`[SyncFlow] Bulk split: ${existingSingles.length} existing | ${newSingles.length} new | ${variantGroups.length} variant groups`);
 
-  // Track whether metafield follow-up is needed
+  // Track whether follow-up steps are needed
   const hasMetafieldProducts = metafieldMappings.length > 0;
 
-  // ── Generate JSONL: productSet combines product + variant + stock in ONE mutation ──
-  const productSetLines: string[] = [];
+  // ── Generate payloads for safe bulk updates on existing single products ──
+  const productUpdateLines: string[] = [];
+  const variantUpdateLines: string[] = [];
   const inventoryItemLines: string[] = [];
+  const stockItems: Array<{ inventoryItemId: string; locationId: string; quantity: number }> = [];
 
   for (const product of existingSingles) {
     const ids = shopifyMap.get(product.sku)!;
@@ -2266,55 +2283,65 @@ async function bulkSync(
       priceRoundingMode
     );
 
-    // Build productSet input (one call = product fields + variant + stock)
-    const psInput: Record<string, unknown> = {
+    const productInput: Record<string, unknown> = {
       id: ids.productId,
     };
 
     // Product-level fields
     if (fullFields) {
-      if (mapped.title) psInput.title = mapped.title;
-      if (mapped.body_html) psInput.descriptionHtml = mapped.body_html;
-      if (mapped.tags) psInput.tags = String(mapped.tags).split(',').map((t: string) => t.trim());
-      if (mapped.vendor) psInput.vendor = mapped.vendor;
-      if (mapped.product_type) psInput.productType = mapped.product_type;
-      if (mapped.status) psInput.status = String(mapped.status).toUpperCase();
+      if (mapped.title) productInput.title = mapped.title;
+      if (mapped.body_html) productInput.descriptionHtml = mapped.body_html;
+      if (mapped.tags) productInput.tags = String(mapped.tags).split(',').map((t: string) => t.trim());
+      if (mapped.vendor) productInput.vendor = mapped.vendor;
+      if (mapped.product_type) productInput.productType = mapped.product_type;
+      if (mapped.status) productInput.status = String(mapped.status).toUpperCase();
+    }
+    if (Object.keys(productInput).length > 1) {
+      productUpdateLines.push(JSON.stringify({ input: productInput }));
     }
 
-    // Metafields — NOT included in bulk JSONL (Shopify silently drops them in bulk ops)
-    // Metafields will be synced via a turbo follow-up pass after bulk completes
-
-    // Variant (price + barcode + stock in one)
+    // Variant fields are updated through productVariantsBulkUpdate.
     const variant: Record<string, unknown> = {
       id: ids.variantId,
-      sku: product.sku,
     };
-    if (mapped.price) variant.price = String(mapped.price);
-    if (mapped.compare_at_price) variant.compareAtPrice = String(mapped.compare_at_price);
+    let hasVariantUpdate = false;
+    if (mapped.price !== undefined && mapped.price !== null && mapped.price !== '') {
+      variant.price = String(mapped.price);
+      hasVariantUpdate = true;
+    }
+    if (mapped.compare_at_price !== undefined && mapped.compare_at_price !== null && mapped.compare_at_price !== '') {
+      variant.compareAtPrice = String(mapped.compare_at_price);
+      hasVariantUpdate = true;
+    }
     if (fullFields) {
-      if (mapped.barcode) variant.barcode = String(mapped.barcode);
+      if (mapped.barcode) {
+        variant.barcode = String(mapped.barcode);
+        hasVariantUpdate = true;
+      }
       if (mapped.variant_requires_shipping !== undefined) {
         variant.inventoryItem = { requiresShipping: isTruthyValue(mapped.variant_requires_shipping) };
+        hasVariantUpdate = true;
       }
       if (mapped.variant_inventory_policy) {
         variant.inventoryPolicy = String(mapped.variant_inventory_policy).toUpperCase();
+        hasVariantUpdate = true;
+      }
+      if (mapped.variant_fulfillment_service && String(mapped.variant_fulfillment_service).startsWith('gid://shopify/FulfillmentService/')) {
+        variant.fulfillmentServiceId = String(mapped.variant_fulfillment_service);
+        hasVariantUpdate = true;
       }
     }
+    if (hasVariantUpdate) {
+      variantUpdateLines.push(JSON.stringify({ productId: ids.productId, variants: [variant] }));
+    }
 
-    // Stock quantity embedded in variant
+    // Stock quantities are batched through inventorySetQuantities.
     const stockQty = mapped.inventory_quantity != null
       ? parseInt(String(mapped.inventory_quantity))
       : NaN;
     if (!isNaN(stockQty) && locationId) {
-      variant.inventoryQuantities = [{
-        locationId,
-        name: 'available',
-        quantity: stockQty,
-      }];
+      stockItems.push({ inventoryItemId: ids.inventoryItemId, locationId, quantity: stockQty });
     }
-
-    psInput.variants = [variant];
-    productSetLines.push(JSON.stringify({ input: psInput, synchronous: false }));
 
     // Inventory item details (tracking + weight) — separate bulk op
     const invInput: Record<string, unknown> = {};
@@ -2328,7 +2355,7 @@ async function bulkSync(
 
   const genMs = Date.now() - startTime;
   console.log(
-    `[SyncFlow] JSONL generated in ${genMs}ms: productSet=${productSetLines.length} invItem=${inventoryItemLines.length}`
+    `[SyncFlow] Payloads generated in ${genMs}ms: productUpdate=${productUpdateLines.length} variantUpdate=${variantUpdateLines.length} invItem=${inventoryItemLines.length} stock=${stockItems.length}`
   );
 
   if (await isJobCancelled(jobId)) return;
@@ -2337,40 +2364,63 @@ async function bulkSync(
   let bulkSuccess = 0;
   let bulkFail = 0;
 
-  // Bulk Op 1: productSet (product + variant + price + stock all in one)
-  let productSetResult: BulkOpResult | null = null;
-  if (productSetLines.length > 0) {
+  // Bulk Op 1: productUpdate (safe product-level fields only)
+  let productUpdateResult: BulkOpResult | null = null;
+  if (productUpdateLines.length > 0) {
     try {
-      console.log(`[SyncFlow] Bulk Op 1/2: productSet (${productSetLines.length} products)...`);
-      productSetResult = await executeBulkOperation(
+      console.log(`[SyncFlow] Bulk Op 1/3: productUpdate (${productUpdateLines.length} products)...`);
+      productUpdateResult = await executeBulkOperation(
         channel,
-        'mutation call($input: ProductSetInput!, $synchronous: Boolean!) { productSet(input: $input, synchronous: $synchronous) { product { id } userErrors { code field message } } }',
-        productSetLines,
-        'productSet',
+        'mutation call($input: ProductInput!) { productUpdate(input: $input) { product { id } userErrors { field message } } }',
+        productUpdateLines,
+        'productUpdate',
         jobId
       );
-      console.log(`[SyncFlow] ✓ productSet done: objects=${productSetResult.objectCount}`);
+      console.log(`[SyncFlow] ✓ productUpdate done: objects=${productUpdateResult.objectCount}`);
       bulkSuccess++;
     } catch (err) {
-      console.error(`[SyncFlow] ✗ productSet failed:`, err);
+      console.error(`[SyncFlow] ✗ productUpdate failed:`, err);
       bulkFail++;
     }
   }
 
   if (await isJobCancelled(jobId)) return;
 
-  // Bulk Op 2: inventoryItemUpdate (tracking + weight)
+  // Bulk Op 2: productVariantsBulkUpdate (variant fields only)
+  let variantUpdateResult: BulkOpResult | null = null;
+  if (variantUpdateLines.length > 0) {
+    try {
+      console.log(`[SyncFlow] Bulk Op 2/3: variantUpdate (${variantUpdateLines.length} products)...`);
+      variantUpdateResult = await executeBulkOperation(
+        channel,
+        'mutation call($productId: ID!, $variants: [ProductVariantsBulkInput!]!) { productVariantsBulkUpdate(productId: $productId, variants: $variants) { productVariants { id } userErrors { field message } } }',
+        variantUpdateLines,
+        'variantUpdate',
+        jobId
+      );
+      console.log(`[SyncFlow] ✓ variantUpdate done: objects=${variantUpdateResult.objectCount}`);
+      bulkSuccess++;
+    } catch (err) {
+      console.error(`[SyncFlow] ✗ variantUpdate failed:`, err);
+      bulkFail++;
+    }
+  }
+
+  if (await isJobCancelled(jobId)) return;
+
+  // Bulk Op 3: inventoryItemUpdate (tracking + weight)
+  let inventoryItemResult: BulkOpResult | null = null;
   if (inventoryItemLines.length > 0) {
     try {
-      console.log(`[SyncFlow] Bulk Op 2/2: inventoryItem (${inventoryItemLines.length} items)...`);
-      const r = await executeBulkOperation(
+      console.log(`[SyncFlow] Bulk Op 3/3: inventoryItem (${inventoryItemLines.length} items)...`);
+      inventoryItemResult = await executeBulkOperation(
         channel,
         'mutation call($id: ID!, $input: InventoryItemInput!) { inventoryItemUpdate(id: $id, input: $input) { inventoryItem { id } userErrors { field message } } }',
         inventoryItemLines,
         'inventoryItem',
         jobId
       );
-      console.log(`[SyncFlow] ✓ inventoryItem done: objects=${r.objectCount}`);
+      console.log(`[SyncFlow] ✓ inventoryItem done: objects=${inventoryItemResult.objectCount}`);
       bulkSuccess++;
     } catch (err) {
       console.error(`[SyncFlow] ✗ inventoryItem failed:`, err);
@@ -2379,7 +2429,7 @@ async function bulkSync(
   }
 
   const bulkMs = Date.now() - startTime;
-  const totalOps = (productSetLines.length > 0 ? 1 : 0) + (inventoryItemLines.length > 0 ? 1 : 0);
+  const totalOps = (productUpdateLines.length > 0 ? 1 : 0) + (variantUpdateLines.length > 0 ? 1 : 0) + (inventoryItemLines.length > 0 ? 1 : 0);
   console.log(`[SyncFlow] Bulk phase: ${bulkSuccess}/${totalOps} ops succeeded in ${(bulkMs / 1000).toFixed(1)}s`);
 
   // If ALL bulk ops failed, throw so caller falls back to turbo/ultra
@@ -2387,29 +2437,86 @@ async function bulkSync(
     throw new Error(`All ${totalOps} bulk operations failed`);
   }
 
-  // ── Parse REAL results from productSet bulk operation ──
-  let realUpdated = 0;
-  let realFailed = 0;
-
-  if (productSetResult?.url) {
-    const results = await downloadBulkResults(productSetResult.url);
-    realUpdated = results.updated;
-    realFailed = results.failed;
-    console.log(`[SyncFlow] Real bulk results: ${realUpdated} updated, ${realFailed} failed (of ${existingSingles.length} sent)`);
-
-    // Log failed products (first 200 errors)
-    if (results.errors.length > 0) {
-      const errorLogs = results.errors.slice(0, 200).map(e => ({
-        sku: e.sku || 'unknown',
-        action: 'failed',
-        message: `Bulk error: ${e.message}`,
-      }));
-      await batchLogSyncEntries(jobId, errorLogs);
+  async function parseBulkOutcome(
+    result: BulkOpResult | null,
+    submittedCount: number,
+    label: string,
+  ): Promise<{ updated: number; failed: number }> {
+    if (!result || submittedCount === 0) {
+      return { updated: 0, failed: 0 };
     }
-  } else if (bulkSuccess > 0) {
-    // Bulk succeeded but no results URL — count all as updated (can't verify)
+
+    if (result.url) {
+      const parsed = await downloadBulkResults(result.url);
+      console.log(`[SyncFlow] ${label} results: ${parsed.updated} updated, ${parsed.failed} failed (of ${submittedCount} sent)`);
+      if (parsed.errors.length > 0) {
+        console.warn(`[SyncFlow] ${label} errors (first 5):`, parsed.errors.slice(0, 5));
+        const errorLogs = parsed.errors.slice(0, 200).map(e => ({
+          sku: e.sku || 'unknown',
+          action: 'failed',
+          message: `${label} error: ${e.message}`,
+        }));
+        await batchLogSyncEntries(jobId, errorLogs);
+      }
+      return { updated: parsed.updated, failed: parsed.failed };
+    }
+
+    console.log(`[SyncFlow] ${label}: no results URL — assuming ${submittedCount} updated`);
+    return { updated: submittedCount, failed: 0 };
+  }
+
+  const productOutcome = await parseBulkOutcome(productUpdateResult, productUpdateLines.length, 'productUpdate');
+  const variantOutcome = await parseBulkOutcome(variantUpdateResult, variantUpdateLines.length, 'variantUpdate');
+  const inventoryOutcome = await parseBulkOutcome(inventoryItemResult, inventoryItemLines.length, 'inventoryItem');
+
+  let stockOk = 0;
+  let stockFail = 0;
+  if (stockItems.length > 0 && !await isJobCancelled(jobId)) {
+    const STOCK_BATCH_SIZE = 100;
+    console.log(`[SyncFlow] Stock follow-up: ${stockItems.length} items in ${Math.ceil(stockItems.length / STOCK_BATCH_SIZE)} batches`);
+    const stockMutation = `
+      mutation inventorySetQuantities($input: InventorySetQuantitiesInput!) {
+        inventorySetQuantities(input: $input) {
+          inventoryAdjustmentGroup { reason }
+          userErrors { field message }
+        }
+      }`;
+
+    let firstStockError = '';
+    for (let si = 0; si < stockItems.length; si += STOCK_BATCH_SIZE) {
+      if (await isJobCancelled(jobId)) break;
+      const batch = stockItems.slice(si, si + STOCK_BATCH_SIZE);
+      try {
+        const result = await shopifyGraphQL(channel, stockMutation, {
+          input: {
+            name: 'available',
+            reason: 'correction',
+            ignoreCompareQuantity: true,
+            quantities: batch,
+          },
+        }) as { inventorySetQuantities: { userErrors?: Array<{ field?: string[]; message: string }> } };
+        if (result.inventorySetQuantities.userErrors?.length) {
+          stockFail += batch.length;
+          if (!firstStockError) firstStockError = JSON.stringify(result.inventorySetQuantities.userErrors.slice(0, 3));
+        } else {
+          stockOk += batch.length;
+        }
+      } catch (err) {
+        stockFail += batch.length;
+        if (!firstStockError) firstStockError = String(err);
+      }
+    }
+    console.log(`[SyncFlow] Stock follow-up complete: ${stockOk} ok, ${stockFail} failed`);
+    if (firstStockError) {
+      console.error(`[SyncFlow] stock first error: ${firstStockError}`);
+    }
+  }
+
+  let realUpdated = Math.max(productOutcome.updated, variantOutcome.updated, inventoryOutcome.updated, stockOk);
+  let realFailed = Math.max(productOutcome.failed, variantOutcome.failed, inventoryOutcome.failed, stockFail);
+
+  if (realUpdated === 0 && realFailed === 0 && bulkSuccess > 0) {
     realUpdated = existingSingles.length;
-    console.log(`[SyncFlow] No results URL — assuming ${realUpdated} updated (unverifiable)`);
   }
 
   // Products that weren't failed are considered updated (or skipped — but we can't tell apart without change detection)
@@ -2425,7 +2532,7 @@ async function bulkSync(
     await batchLogSyncEntries(jobId, existingSingles.slice(0, realUpdated || existingSingles.length).map(p => ({
       sku: p.sku,
       action: 'updated',
-      message: 'Bulk sync (productSet)',
+      message: 'Bulk sync (hybrid existing singles)',
     })));
   }
 
