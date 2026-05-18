@@ -2130,33 +2130,66 @@ async function downloadBulkResults(
     for (const line of lines) {
       try {
         const obj = JSON.parse(line);
-        // productSet results have: { data: { productSet: { product: {...}, userErrors: [...] } } }
-        const productSet = obj?.data?.productSet || obj?.productSet;
+
+        // Check for top-level GraphQL errors (e.g. access denied, validation)
+        if (obj?.errors) {
+          failed++;
+          for (const err of obj.errors) {
+            if (errors.length < 20) errors.push({ message: err.message || JSON.stringify(err) });
+          }
+          continue;
+        }
+
+        const data = obj?.data || obj;
+
+        // productVariantsBulkUpdate results
+        const variantsBulk = data?.productVariantsBulkUpdate;
+        if (variantsBulk) {
+          const userErrors = variantsBulk.userErrors || [];
+          if (userErrors.length > 0) {
+            failed++;
+            for (const err of userErrors) {
+              if (errors.length < 20) errors.push({ message: `${err.field?.join?.('.') || ''}: ${err.message}` });
+            }
+          } else {
+            updated++;
+          }
+          continue;
+        }
+
+        // productSet results
+        const productSet = data?.productSet;
         if (productSet) {
           const userErrors = productSet.userErrors || [];
           if (userErrors.length > 0) {
             failed++;
             for (const err of userErrors) {
-              errors.push({ message: `${err.field?.join('.') || ''}: ${err.message}` });
+              if (errors.length < 20) errors.push({ message: `${err.field?.join?.('.') || ''}: ${err.message}` });
             }
           } else {
             updated++;
           }
-        } else {
-          // inventoryItemUpdate results
-          const invUpdate = obj?.data?.inventoryItemUpdate || obj?.inventoryItemUpdate;
-          if (invUpdate) {
-            const userErrors = invUpdate.userErrors || [];
-            if (userErrors.length > 0) {
-              failed++;
-              for (const err of userErrors) {
-                errors.push({ message: `inventory: ${err.message}` });
-              }
-            } else {
-              updated++;
-            }
-          }
+          continue;
         }
+
+        // inventoryItemUpdate results
+        const invUpdate = data?.inventoryItemUpdate;
+        if (invUpdate) {
+          const userErrors = invUpdate.userErrors || [];
+          if (userErrors.length > 0) {
+            failed++;
+            for (const err of userErrors) {
+              if (errors.length < 20) errors.push({ message: `inventory: ${err.message}` });
+            }
+          } else {
+            updated++;
+          }
+          continue;
+        }
+
+        // Unknown format - log first occurrence
+        if (errors.length < 5) errors.push({ message: `Unknown result format: ${line.substring(0, 200)}` });
+        failed++;
       } catch { /* skip unparseable lines */ }
     }
 
@@ -2636,6 +2669,7 @@ export async function runSyncJob(config: SyncJobConfig) {
 
       // ── Phase 1: Bulk Operation for price updates (NO rate limits) ──
       // ── Phase 3: Batched metafieldsSet (runs IN PARALLEL with price bulk op) ──
+      let priceOk = 0, priceFail = 0;
       const bulkPricePromise = (async () => {
         if (priceLines.length === 0) return;
         try {
@@ -2647,7 +2681,19 @@ export async function runSyncJob(config: SyncJobConfig) {
             'priceUpdate',
             jobId
           );
-          console.log(`[SyncFlow] ✓ Bulk price done: objects=${result.objectCount}`);
+          console.log(`[SyncFlow] Bulk price op done: status=${result.status} objects=${result.objectCount}`);
+          // Download and check the results file for per-line errors
+          const bulkResults = await downloadBulkResults(result.url);
+          priceOk = bulkResults.updated;
+          priceFail = bulkResults.failed;
+          if (bulkResults.errors.length > 0) {
+            console.error(`[SyncFlow] ✗ Bulk price errors (first 5):`, bulkResults.errors.slice(0, 5));
+          }
+          if (priceFail > 0) {
+            console.warn(`[SyncFlow] Bulk price: ${priceOk} ok, ${priceFail} FAILED out of ${priceLines.length}`);
+          } else {
+            console.log(`[SyncFlow] ✓ Bulk price: all ${priceOk} succeeded`);
+          }
         } catch (err) {
           console.error(`[SyncFlow] ✗ Bulk price failed, falling back to turbo:`, err);
           // Fallback: individual calls for price
@@ -2657,6 +2703,7 @@ export async function runSyncJob(config: SyncJobConfig) {
         }
       })();
 
+      let mfOk = 0, mfFail = 0;
       const metafieldPromise = (async () => {
         if (metafieldInputs.length === 0) return;
         const METAFIELD_BATCH_SIZE = 25;
@@ -2665,18 +2712,25 @@ export async function runSyncJob(config: SyncJobConfig) {
           mutation metafieldsSet($metafields: [MetafieldsSetInput!]!) {
             metafieldsSet(metafields: $metafields) { metafields { id } userErrors { field message code } }
           }`;
-        let mfOk = 0, mfFail = 0;
+        let firstError = '';
         for (let mi = 0; mi < metafieldInputs.length; mi += METAFIELD_BATCH_SIZE) {
           if (await isJobCancelled(jobId)) break;
           const batch = metafieldInputs.slice(mi, mi + METAFIELD_BATCH_SIZE);
           try {
             const r = await shopifyGraphQL(channel, metafieldsSetMutation, { metafields: batch }) as {
-              metafieldsSet: { userErrors?: Array<{ message: string }> };
+              metafieldsSet: { userErrors?: Array<{ message: string; field?: string[]; code?: string }> };
             };
-            if (r.metafieldsSet.userErrors?.length) { mfFail += batch.length; } else { mfOk += batch.length; }
-          } catch { mfFail += batch.length; }
+            if (r.metafieldsSet.userErrors?.length) {
+              mfFail += batch.length;
+              if (!firstError) firstError = JSON.stringify(r.metafieldsSet.userErrors.slice(0, 3));
+            } else { mfOk += batch.length; }
+          } catch (err) {
+            mfFail += batch.length;
+            if (!firstError) firstError = String(err);
+          }
         }
-        console.log(`[SyncFlow] ✓ metafieldsSet done: ${mfOk} ok, ${mfFail} failed`);
+        console.log(`[SyncFlow] metafieldsSet done: ${mfOk} ok, ${mfFail} failed`);
+        if (firstError) console.error(`[SyncFlow] metafield first error: ${firstError}`);
       })();
 
       // Wait for both price bulk op and metafield batching to finish
@@ -2685,6 +2739,7 @@ export async function runSyncJob(config: SyncJobConfig) {
       if (await isJobCancelled(jobId)) return;
 
       // ── Phase 2: Batched stock updates (100 items per call) ──
+      let stockOk = 0, stockFail = 0;
       if (stockItems.length > 0) {
         const STOCK_BATCH_SIZE = 100;
         const stockBatches = Math.ceil(stockItems.length / STOCK_BATCH_SIZE);
@@ -2698,7 +2753,7 @@ export async function runSyncJob(config: SyncJobConfig) {
             }
           }`;
 
-        let stockOk = 0, stockFail = 0;
+        let firstStockError = '';
         for (let si = 0; si < stockItems.length; si += STOCK_BATCH_SIZE) {
           if (await isJobCancelled(jobId)) break;
           const batch = stockItems.slice(si, si + STOCK_BATCH_SIZE);
@@ -2710,21 +2765,32 @@ export async function runSyncJob(config: SyncJobConfig) {
                 ignoreCompareQuantity: true,
                 quantities: batch,
               },
-            }) as { inventorySetQuantities: { userErrors?: Array<{ message: string }> } };
-            if (r.inventorySetQuantities.userErrors?.length) { stockFail += batch.length; } else { stockOk += batch.length; }
-          } catch { stockFail += batch.length; }
+            }) as { inventorySetQuantities: { userErrors?: Array<{ message: string; field?: string[] }> } };
+            if (r.inventorySetQuantities.userErrors?.length) {
+              stockFail += batch.length;
+              if (!firstStockError) firstStockError = JSON.stringify(r.inventorySetQuantities.userErrors.slice(0, 3));
+            } else { stockOk += batch.length; }
+          } catch (err) {
+            stockFail += batch.length;
+            if (!firstStockError) firstStockError = String(err);
+          }
         }
-        console.log(`[SyncFlow] ✓ Stock done: ${stockOk} ok, ${stockFail} failed`);
+        console.log(`[SyncFlow] Stock done: ${stockOk} ok, ${stockFail} failed`);
+        if (firstStockError) console.error(`[SyncFlow] stock first error: ${firstStockError}`);
       }
 
-      // ── Update job counts ──
+      // ── Update job counts (use ACTUAL success counts) ──
+      const actualUpdated = Math.max(priceOk, stockOk, mfOk);
+      const actualFailed = Math.max(priceFail, stockFail, mfFail);
       await query(
-        'UPDATE sync_jobs SET processed_count = $1, updated_count = $2, skipped_count = $3 WHERE id = $4',
-        [products.length, Math.max(priceLines.length, stockItems.length, metafieldInputs.length > 0 ? 1 : 0), skippedCount, jobId]
+        'UPDATE sync_jobs SET processed_count = $1, updated_count = $2, skipped_count = $3, failed_count = $4 WHERE id = $5',
+        [products.length, actualUpdated, skippedCount, actualFailed, jobId]
       );
 
       const totalMs = Date.now() - startMs;
-      console.log(`[SyncFlow] ══ BULK-OPTIMIZED complete in ${(totalMs / 1000).toFixed(1)}s ══ price=${priceLines.length} stock=${stockItems.length} meta=${metafieldInputs.length}`);
+      console.log(`[SyncFlow] ══ BULK-OPTIMIZED complete in ${(totalMs / 1000).toFixed(1)}s ══`);
+      console.log(`[SyncFlow]   Price: ${priceOk}/${priceLines.length} ok | Stock: ${stockOk}/${stockItems.length} ok | Meta: ${mfOk}/${metafieldInputs.length} ok`);
+      console.log(`[SyncFlow]   Skipped: ${skippedCount} | Total failed: ${actualFailed}`);
     } else {
       if (products.length > BULK_SYNC_THRESHOLD) {
         console.log(`[SyncFlow] Pathway: BULK ULTRA (${products.length} products, ${preset})`);
