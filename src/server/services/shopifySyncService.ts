@@ -205,19 +205,47 @@ async function getMetafieldDefinitions(channel: Channel): Promise<Map<string, st
   return defs;
 }
 
+// ── Tier Discount Consolidation ────────────────────────────────────────────
+// Keys that should be consolidated into a single JSON metafield (custom.tier_discounts)
+const TIER_DISCOUNT_KEYS = new Set([
+  'medicines_1', 'medicines_2', 'medicines_3', 'medicines_4',
+  'medicines_5', 'medicines_6', 'medicines_7',
+  'cosmo_1', 'cosmo_2', 'cosmo_3', 'cosmo_4',
+  'cosmo_5', 'cosmo_6', 'cosmo_7',
+]);
+
+function isTierDiscountMapping(namespace: string, key: string): boolean {
+  return namespace === 'custom' && TIER_DISCOUNT_KEYS.has(key);
+}
+
 function buildMetafields(
   rawData: Record<string, string | number | null>,
   metafieldMappings: AttributeMapping[],
   shopifyDefs: Map<string, string>,
 ): Array<{ namespace: string; key: string; type: string; value: string }> {
-  return metafieldMappings
+  // Separate tier discount mappings from regular metafield mappings
+  const tierMappings: AttributeMapping[] = [];
+  const regularMappings: AttributeMapping[] = [];
+
+  for (const m of metafieldMappings) {
+    const parts = m.target_field.replace('metafield:', '').split(':');
+    const namespace = parts[0];
+    const key = parts[1];
+    if (isTierDiscountMapping(namespace, key)) {
+      tierMappings.push(m);
+    } else {
+      regularMappings.push(m);
+    }
+  }
+
+  // Build regular metafields as before
+  const result = regularMappings
     .filter(m => rawData[m.feed_column] !== undefined && rawData[m.feed_column] !== null && rawData[m.feed_column] !== '')
     .map(m => {
       const parts = m.target_field.replace('metafield:', '').split(':');
       const namespace = parts[0];
       const key = parts[1];
       const userType = parts[2] || 'single_line_text_field';
-      // Auto-detect: use Shopify definition type if available, else user's selection
       const defType = shopifyDefs.get(`${namespace}.${key}`);
       const mfType = defType || userType;
       return {
@@ -227,6 +255,30 @@ function buildMetafields(
         value: formatMetafieldValue(rawData[m.feed_column], mfType),
       };
     });
+
+  // Consolidate tier discount mappings into a single JSON metafield
+  if (tierMappings.length > 0) {
+    const tierDiscounts: Record<string, number> = {};
+    for (const m of tierMappings) {
+      const rawVal = rawData[m.feed_column];
+      if (rawVal === undefined || rawVal === null || rawVal === '') continue;
+      const numVal = typeof rawVal === 'number' ? rawVal : parseFloat(String(rawVal));
+      if (!isNaN(numVal) && numVal > 0) {
+        const key = m.target_field.replace('metafield:', '').split(':')[1];
+        tierDiscounts[key] = numVal;
+      }
+    }
+    if (Object.keys(tierDiscounts).length > 0) {
+      result.push({
+        namespace: 'custom',
+        key: 'tier_discounts',
+        type: 'json',
+        value: JSON.stringify(tierDiscounts),
+      });
+    }
+  }
+
+  return result;
 }
 
 function parseMappedWeight(mapped: Record<string, unknown>): { value: number; unit: string } | null {
