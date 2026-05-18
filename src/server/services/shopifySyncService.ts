@@ -2566,70 +2566,165 @@ export async function runSyncJob(config: SyncJobConfig) {
     console.log(`[SyncFlow] Job ${jobId} | Preset: ${preset} | Products: ${products.length} | Images: ${withImages}`);
 
     if (preset === 'price_stock_meta' || (config.fields && config.fields.every(f => ['price', 'stock', 'metafields'].includes(f)))) {
-      // Optimized: Turbo for price+stock (no metafields per-product), then batched metafieldsSet
-      const workers = Math.min(Math.max(1, config.workers || 1), 10);
+      // ══ OPTIMIZED price_stock_meta: Bulk Op (price) + Batched Stock + Batched Metafields ══
       const metafieldMappings = mappings.filter(m => m.target_field.startsWith('metafield:'));
-      const nonMetafieldMappings = mappings.filter(m => !m.target_field.startsWith('metafield:'));
+      const startMs = Date.now();
 
-      // Phase 1: Turbo sync for price + stock only (2 calls per product instead of 3)
-      console.log(`[SyncFlow] Pathway: TURBO+BATCH (${products.length} products, workers=${workers}, metafields batched separately)`);
-      await turboSync(channel, products, nonMetafieldMappings, jobId, priceAdjustmentPercent, priceRoundingMode, warehouseName, workers);
+      // ── Preparation: fetch current state for change detection ──
+      console.log(`[SyncFlow] Pathway: BULK-OPTIMIZED (${products.length} products)`);
+      const shopifyMap = await getShopifyProductMap(channel);
 
-      // Phase 2: Batched metafieldsSet (25 per call instead of 1 per product)
-      if (metafieldMappings.length > 0 && !await isJobCancelled(jobId)) {
-        const METAFIELD_BATCH_SIZE = 25;
-        const shopifyMap = await getShopifyProductMap(channel);
-        const shopifyDefs = await getMetafieldDefinitions(channel);
+      let locationId = channel.settings?.stock_location_id;
+      if (!locationId) {
+        const locData = await shopifyGraphQL(channel, `{ locations(first: 1) { edges { node { id } } } }`) as {
+          locations: { edges: Array<{ node: { id: string } }> };
+        };
+        locationId = locData.locations.edges[0]?.node?.id;
+      }
 
-        const allMetafieldInputs: Array<{ ownerId: string; namespace: string; key: string; type: string; value: string }> = [];
-        for (const product of products) {
-          const ids = shopifyMap.get(product.sku);
-          if (!ids) continue;
+      const shopifyDefs = metafieldMappings.length > 0 ? await getMetafieldDefinitions(channel) : new Map<string, string>();
+
+      // ── Change detection: only process products with actual changes ──
+      const priceLines: string[] = [];
+      const stockItems: Array<{ inventoryItemId: string; locationId: string; quantity: number }> = [];
+      const metafieldInputs: Array<{ ownerId: string; namespace: string; key: string; type: string; value: string }> = [];
+      let skippedCount = 0;
+
+      for (const product of products) {
+        const ids = shopifyMap.get(product.sku);
+        if (!ids) { skippedCount++; continue; }
+
+        const mapped = applyPriceAdjustment(applyMappings(product.raw_data, mappings), priceAdjustmentPercent, priceRoundingMode);
+
+        // Price change detection
+        const newPrice = mapped.price ? String(mapped.price) : null;
+        const newCompareAtPrice = mapped.compare_at_price ? String(mapped.compare_at_price) : null;
+        const priceChanged = (newPrice !== null && ids.price !== newPrice) || newCompareAtPrice !== null;
+
+        if (priceChanged) {
+          const variantInput: Record<string, unknown> = { id: ids.variantId };
+          if (newPrice) variantInput.price = newPrice;
+          if (newCompareAtPrice) variantInput.compareAtPrice = newCompareAtPrice;
+          priceLines.push(JSON.stringify({ productId: ids.productId, variants: [variantInput] }));
+        }
+
+        // Stock change detection
+        const stockQty = mapped.inventory_quantity != null ? parseInt(String(mapped.inventory_quantity)) : NaN;
+        const stockChanged = !isNaN(stockQty) && ids.inventoryQuantity !== stockQty;
+
+        if (stockChanged && locationId) {
+          stockItems.push({ inventoryItemId: ids.inventoryItemId, locationId, quantity: stockQty });
+        }
+
+        // Metafields (always include — no easy change detection for metafields)
+        if (metafieldMappings.length > 0) {
           const metafields = buildMetafields(product.raw_data, metafieldMappings, shopifyDefs);
           for (const mf of metafields) {
-            allMetafieldInputs.push({
-              ownerId: ids.productId,
-              namespace: mf.namespace,
-              key: mf.key,
-              type: mf.type,
-              value: mf.value,
-            });
+            metafieldInputs.push({ ownerId: ids.productId, namespace: mf.namespace, key: mf.key, type: mf.type, value: mf.value });
           }
         }
 
-        console.log(`[SyncFlow] metafieldsSet: ${allMetafieldInputs.length} entries → ${Math.ceil(allMetafieldInputs.length / METAFIELD_BATCH_SIZE)} batches`);
+        if (!priceChanged && !stockChanged && metafieldMappings.length === 0) {
+          skippedCount++;
+        }
+      }
 
+      const prepMs = Date.now() - startMs;
+      console.log(`[SyncFlow] Change detection (${prepMs}ms): ${priceLines.length} price, ${stockItems.length} stock, ${metafieldInputs.length} metafields, ${skippedCount} skipped`);
+
+      if (await isJobCancelled(jobId)) return;
+
+      // ── Phase 1: Bulk Operation for price updates (NO rate limits) ──
+      // ── Phase 3: Batched metafieldsSet (runs IN PARALLEL with price bulk op) ──
+      const bulkPricePromise = (async () => {
+        if (priceLines.length === 0) return;
+        try {
+          console.log(`[SyncFlow] Phase 1: Bulk price update (${priceLines.length} products via JSONL)...`);
+          const result = await executeBulkOperation(
+            channel,
+            'mutation call($productId: ID!, $variants: [ProductVariantsBulkInput!]!) { productVariantsBulkUpdate(productId: $productId, variants: $variants) { productVariants { id } userErrors { field message } } }',
+            priceLines,
+            'priceUpdate',
+            jobId
+          );
+          console.log(`[SyncFlow] ✓ Bulk price done: objects=${result.objectCount}`);
+        } catch (err) {
+          console.error(`[SyncFlow] ✗ Bulk price failed, falling back to turbo:`, err);
+          // Fallback: individual calls for price
+          const nonMetafieldMappings = mappings.filter(m => !m.target_field.startsWith('metafield:'));
+          const workers = Math.min(Math.max(1, config.workers || 1), 10);
+          await turboSync(channel, products, nonMetafieldMappings, jobId, priceAdjustmentPercent, priceRoundingMode, warehouseName, workers);
+        }
+      })();
+
+      const metafieldPromise = (async () => {
+        if (metafieldInputs.length === 0) return;
+        const METAFIELD_BATCH_SIZE = 25;
+        console.log(`[SyncFlow] Phase 3: metafieldsSet (${metafieldInputs.length} entries → ${Math.ceil(metafieldInputs.length / METAFIELD_BATCH_SIZE)} batches, parallel with bulk op)`);
         const metafieldsSetMutation = `
           mutation metafieldsSet($metafields: [MetafieldsSetInput!]!) {
-            metafieldsSet(metafields: $metafields) {
-              metafields { id }
-              userErrors { field message code }
+            metafieldsSet(metafields: $metafields) { metafields { id } userErrors { field message code } }
+          }`;
+        let mfOk = 0, mfFail = 0;
+        for (let mi = 0; mi < metafieldInputs.length; mi += METAFIELD_BATCH_SIZE) {
+          if (await isJobCancelled(jobId)) break;
+          const batch = metafieldInputs.slice(mi, mi + METAFIELD_BATCH_SIZE);
+          try {
+            const r = await shopifyGraphQL(channel, metafieldsSetMutation, { metafields: batch }) as {
+              metafieldsSet: { userErrors?: Array<{ message: string }> };
+            };
+            if (r.metafieldsSet.userErrors?.length) { mfFail += batch.length; } else { mfOk += batch.length; }
+          } catch { mfFail += batch.length; }
+        }
+        console.log(`[SyncFlow] ✓ metafieldsSet done: ${mfOk} ok, ${mfFail} failed`);
+      })();
+
+      // Wait for both price bulk op and metafield batching to finish
+      await Promise.all([bulkPricePromise, metafieldPromise]);
+
+      if (await isJobCancelled(jobId)) return;
+
+      // ── Phase 2: Batched stock updates (100 items per call) ──
+      if (stockItems.length > 0) {
+        const STOCK_BATCH_SIZE = 100;
+        const stockBatches = Math.ceil(stockItems.length / STOCK_BATCH_SIZE);
+        console.log(`[SyncFlow] Phase 2: Stock batching (${stockItems.length} items → ${stockBatches} calls)`);
+
+        const stockMutation = `
+          mutation inventorySetQuantities($input: InventorySetQuantitiesInput!) {
+            inventorySetQuantities(input: $input) {
+              inventoryAdjustmentGroup { reason }
+              userErrors { field message }
             }
           }`;
 
-        let mfSuccess = 0;
-        let mfFailed = 0;
-        for (let mi = 0; mi < allMetafieldInputs.length; mi += METAFIELD_BATCH_SIZE) {
+        let stockOk = 0, stockFail = 0;
+        for (let si = 0; si < stockItems.length; si += STOCK_BATCH_SIZE) {
           if (await isJobCancelled(jobId)) break;
-          const batch = allMetafieldInputs.slice(mi, mi + METAFIELD_BATCH_SIZE);
+          const batch = stockItems.slice(si, si + STOCK_BATCH_SIZE);
           try {
-            const result = await shopifyGraphQL(channel, metafieldsSetMutation, { metafields: batch }) as {
-              metafieldsSet: { metafields?: Array<{ id: string }>; userErrors?: Array<{ field: string; message: string; code: string }> };
-            };
-            const errs = result.metafieldsSet.userErrors;
-            if (errs && errs.length > 0) {
-              mfFailed += batch.length;
-              console.warn(`[SyncFlow] metafieldsSet batch ${Math.floor(mi / METAFIELD_BATCH_SIZE) + 1} errors:`, errs.slice(0, 3));
-            } else {
-              mfSuccess += batch.length;
-            }
-          } catch (err) {
-            mfFailed += batch.length;
-            console.warn(`[SyncFlow] metafieldsSet batch failed:`, err);
-          }
+            const r = await shopifyGraphQL(channel, stockMutation, {
+              input: {
+                name: 'available',
+                reason: 'correction',
+                ignoreCompareQuantity: true,
+                quantities: batch,
+              },
+            }) as { inventorySetQuantities: { userErrors?: Array<{ message: string }> } };
+            if (r.inventorySetQuantities.userErrors?.length) { stockFail += batch.length; } else { stockOk += batch.length; }
+          } catch { stockFail += batch.length; }
         }
-        console.log(`[SyncFlow] Metafield batching complete: ${mfSuccess} ok, ${mfFailed} failed`);
+        console.log(`[SyncFlow] ✓ Stock done: ${stockOk} ok, ${stockFail} failed`);
       }
+
+      // ── Update job counts ──
+      await query(
+        'UPDATE sync_jobs SET processed_count = $1, updated_count = $2, skipped_count = $3 WHERE id = $4',
+        [products.length, Math.max(priceLines.length, stockItems.length, metafieldInputs.length > 0 ? 1 : 0), skippedCount, jobId]
+      );
+
+      const totalMs = Date.now() - startMs;
+      console.log(`[SyncFlow] ══ BULK-OPTIMIZED complete in ${(totalMs / 1000).toFixed(1)}s ══ price=${priceLines.length} stock=${stockItems.length} meta=${metafieldInputs.length}`);
     } else {
       if (products.length > BULK_SYNC_THRESHOLD) {
         console.log(`[SyncFlow] Pathway: BULK ULTRA (${products.length} products, ${preset})`);
