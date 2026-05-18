@@ -171,11 +171,23 @@ export async function runNoonSyncJob(config: NoonSyncJobConfig): Promise<void> {
         try {
           const stockUpdates = buildStockPayload(batch, mappings, noonSkuMap, warehouseCode);
           if (stockUpdates.length > 0) {
-            await noonApiRequest(credentials, countryCode, 'POST', '/stock/v1/stock-update', {
+            const stockResponse = await noonApiRequest(credentials, countryCode, 'POST', '/stock/v1/stock-update', {
               items: stockUpdates.map(s => ({ warehouse_code: s.warehouseCode, partner_sku: s.partnerSku, qty: s.quantity })),
-            });
+            }) as { errors?: Array<{ partner_sku?: string; message?: string }>; [key: string]: unknown };
+
+            // Check for per-item errors in Noon response
+            const itemErrors = stockResponse?.errors || [];
+            const failedSkus = new Set(itemErrors.map(e => e.partner_sku).filter(Boolean));
+
             for (const update of stockUpdates) {
-              await logEntry(jobId, update.partnerSku, 'updated', `Stock updated to ${update.quantity}`);
+              if (failedSkus.has(update.partnerSku)) {
+                const err = itemErrors.find(e => e.partner_sku === update.partnerSku);
+                await logEntry(jobId, update.partnerSku, 'failed', `Stock rejected: ${err?.message || 'unknown error'}`);
+                failedCount++;
+              } else {
+                await logEntry(jobId, update.partnerSku, 'updated', `Stock updated to ${update.quantity}`);
+                updatedCount++;
+              }
             }
           }
         } catch (err) {
@@ -210,18 +222,28 @@ export async function runNoonSyncJob(config: NoonSyncJobConfig): Promise<void> {
               partnerSku, price, msrp, salePrice,
             }));
 
-            await noonApiRequest(credentials, countryCode, 'POST', '/pricing/v1/pricing/upsert', {
+            const priceResponse = await noonApiRequest(credentials, countryCode, 'POST', '/pricing/v1/pricing/upsert', {
               items: cleanPayload.map(p => ({
                 partner_sku: p.partnerSku,
                 price: p.price,
                 ...(p.msrp ? { msrp: p.msrp } : {}),
                 ...(p.salePrice ? { sale_price: p.salePrice } : {}),
               })),
-            });
+            }) as { errors?: Array<{ partner_sku?: string; message?: string }>; [key: string]: unknown };
+
+            // Check for per-item errors in Noon response
+            const priceErrors = priceResponse?.errors || [];
+            const priceFailedSkus = new Set(priceErrors.map(e => e.partner_sku).filter(Boolean));
 
             for (const update of priceUpdates) {
-              await logEntry(jobId, update.partnerSku, 'updated', `Price updated to ${update.price}`);
-              updatedCount++;
+              if (priceFailedSkus.has(update.partnerSku)) {
+                const err = priceErrors.find(e => e.partner_sku === update.partnerSku);
+                await logEntry(jobId, update.partnerSku, 'failed', `Price rejected: ${err?.message || 'unknown error'}`);
+                failedCount++;
+              } else {
+                await logEntry(jobId, update.partnerSku, 'updated', `Price updated to ${update.price}`);
+                updatedCount++;
+              }
             }
           }
         } catch (err) {
@@ -236,13 +258,11 @@ export async function runNoonSyncJob(config: NoonSyncJobConfig): Promise<void> {
 
       processedCount += batch.length;
 
-      // Progress update
-      if (i % (BATCH_SIZE * 5) === 0) {
-        await query(
-          'UPDATE sync_jobs SET processed_count = $1, updated_count = $2, failed_count = $3, skipped_count = $4 WHERE id = $5',
-          [processedCount, updatedCount, failedCount, skippedCount, jobId]
-        );
-      }
+      // Progress update every batch
+      await query(
+        'UPDATE sync_jobs SET processed_count = $1, updated_count = $2, failed_count = $3, skipped_count = $4 WHERE id = $5',
+        [processedCount, updatedCount, failedCount, skippedCount, jobId]
+      );
     }
 
     await completeJob(jobId, processedCount, updatedCount, failedCount, skippedCount);

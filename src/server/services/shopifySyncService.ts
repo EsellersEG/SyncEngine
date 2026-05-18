@@ -2050,6 +2050,72 @@ async function batchLogSyncEntries(
   }
 }
 
+/**
+ * Download and parse the bulk operation results JSONL from Shopify.
+ * Returns per-product outcomes: { updated, failed, errors[] }
+ */
+async function downloadBulkResults(
+  resultUrl: string | null | undefined
+): Promise<{ updated: number; failed: number; errors: Array<{ sku?: string; message: string }> }> {
+  if (!resultUrl) {
+    return { updated: 0, failed: 0, errors: [] };
+  }
+
+  try {
+    const res = await fetch(resultUrl, { signal: AbortSignal.timeout(60000) });
+    if (!res.ok) {
+      console.warn(`[SyncFlow] Bulk results download failed (${res.status})`);
+      return { updated: 0, failed: 0, errors: [{ message: `Results download failed: ${res.status}` }] };
+    }
+
+    const text = await res.text();
+    const lines = text.trim().split('\n').filter(Boolean);
+
+    let updated = 0;
+    let failed = 0;
+    const errors: Array<{ sku?: string; message: string }> = [];
+
+    for (const line of lines) {
+      try {
+        const obj = JSON.parse(line);
+        // productSet results have: { data: { productSet: { product: {...}, userErrors: [...] } } }
+        const productSet = obj?.data?.productSet || obj?.productSet;
+        if (productSet) {
+          const userErrors = productSet.userErrors || [];
+          if (userErrors.length > 0) {
+            failed++;
+            for (const err of userErrors) {
+              errors.push({ message: `${err.field?.join('.') || ''}: ${err.message}` });
+            }
+          } else {
+            updated++;
+          }
+        } else {
+          // inventoryItemUpdate results
+          const invUpdate = obj?.data?.inventoryItemUpdate || obj?.inventoryItemUpdate;
+          if (invUpdate) {
+            const userErrors = invUpdate.userErrors || [];
+            if (userErrors.length > 0) {
+              failed++;
+              for (const err of userErrors) {
+                errors.push({ message: `inventory: ${err.message}` });
+              }
+            } else {
+              updated++;
+            }
+          }
+        }
+      } catch { /* skip unparseable lines */ }
+    }
+
+    console.log(`[SyncFlow] Bulk results parsed: ${lines.length} lines, ${updated} ok, ${failed} failed`);
+    return { updated, failed, errors };
+  } catch (err) {
+    console.error('[SyncFlow] Bulk results download error:', err);
+    return { updated: 0, failed: 0, errors: [{ message: String(err) }] };
+  }
+}
+
 async function bulkSync(
   channel: Channel,
   products: ProductRow[],
@@ -2100,6 +2166,9 @@ async function bulkSync(
 
   console.log(`[SyncFlow] Bulk split: ${existingSingles.length} existing | ${newSingles.length} new | ${variantGroups.length} variant groups`);
 
+  // Track whether metafield follow-up is needed
+  const hasMetafieldProducts = metafieldMappings.length > 0;
+
   // ── Generate JSONL: productSet combines product + variant + stock in ONE mutation ──
   const productSetLines: string[] = [];
   const inventoryItemLines: string[] = [];
@@ -2127,11 +2196,8 @@ async function bulkSync(
       if (mapped.status) psInput.status = String(mapped.status).toUpperCase();
     }
 
-    // Metafields
-    const metafields = metafieldMappings.length > 0
-      ? buildMetafields(product.raw_data, metafieldMappings, shopifyDefs)
-      : [];
-    if (metafields.length > 0) psInput.metafields = metafields;
+    // Metafields — NOT included in bulk JSONL (Shopify silently drops them in bulk ops)
+    // Metafields will be synced via a turbo follow-up pass after bulk completes
 
     // Variant (price + barcode + stock in one)
     const variant: Record<string, unknown> = {
@@ -2187,17 +2253,18 @@ async function bulkSync(
   let bulkFail = 0;
 
   // Bulk Op 1: productSet (product + variant + price + stock all in one)
+  let productSetResult: BulkOpResult | null = null;
   if (productSetLines.length > 0) {
     try {
       console.log(`[SyncFlow] Bulk Op 1/2: productSet (${productSetLines.length} products)...`);
-      const r = await executeBulkOperation(
+      productSetResult = await executeBulkOperation(
         channel,
         'mutation call($input: ProductSetInput!, $synchronous: Boolean!) { productSet(input: $input, synchronous: $synchronous) { product { id } userErrors { code field message } } }',
         productSetLines,
         'productSet',
         jobId
       );
-      console.log(`[SyncFlow] ✓ productSet done: objects=${r.objectCount}`);
+      console.log(`[SyncFlow] ✓ productSet done: objects=${productSetResult.objectCount}`);
       bulkSuccess++;
     } catch (err) {
       console.error(`[SyncFlow] ✗ productSet failed:`, err);
@@ -2235,17 +2302,80 @@ async function bulkSync(
     throw new Error(`All ${totalOps} bulk operations failed`);
   }
 
+  // ── Parse REAL results from productSet bulk operation ──
+  let realUpdated = 0;
+  let realFailed = 0;
+
+  if (productSetResult?.url) {
+    const results = await downloadBulkResults(productSetResult.url);
+    realUpdated = results.updated;
+    realFailed = results.failed;
+    console.log(`[SyncFlow] Real bulk results: ${realUpdated} updated, ${realFailed} failed (of ${existingSingles.length} sent)`);
+
+    // Log failed products (first 200 errors)
+    if (results.errors.length > 0) {
+      const errorLogs = results.errors.slice(0, 200).map(e => ({
+        sku: e.sku || 'unknown',
+        action: 'failed',
+        message: `Bulk error: ${e.message}`,
+      }));
+      await batchLogSyncEntries(jobId, errorLogs);
+    }
+  } else if (bulkSuccess > 0) {
+    // Bulk succeeded but no results URL — count all as updated (can't verify)
+    realUpdated = existingSingles.length;
+    console.log(`[SyncFlow] No results URL — assuming ${realUpdated} updated (unverifiable)`);
+  }
+
+  // Products that weren't failed are considered updated (or skipped — but we can't tell apart without change detection)
+  const bulkSkipped = existingSingles.length - realUpdated - realFailed;
+
   await query(
-    'UPDATE sync_jobs SET processed_count = $1, updated_count = $2 WHERE id = $3',
-    [existingSingles.length, existingSingles.length, jobId]
+    'UPDATE sync_jobs SET processed_count = $1, updated_count = $2, failed_count = failed_count + $3, skipped_count = skipped_count + $4 WHERE id = $5',
+    [existingSingles.length, realUpdated, realFailed, bulkSkipped > 0 ? bulkSkipped : 0, jobId]
   );
 
-  // Batch log all existing products
-  await batchLogSyncEntries(jobId, existingSingles.map(p => ({
-    sku: p.sku,
-    action: 'updated',
-    message: 'Bulk sync (productSet)',
-  })));
+  // Batch log updated products
+  if (realUpdated > 0 || (bulkSuccess > 0 && realFailed === 0)) {
+    await batchLogSyncEntries(jobId, existingSingles.slice(0, realUpdated || existingSingles.length).map(p => ({
+      sku: p.sku,
+      action: 'updated',
+      message: 'Bulk sync (productSet)',
+    })));
+  }
+
+  // ── Metafield follow-up: run turbo pass for metafield updates (bulk drops them) ──
+  if (hasMetafieldProducts && existingSingles.length > 0 && !await isJobCancelled(jobId)) {
+    console.log(`[SyncFlow] Metafield follow-up: ${existingSingles.length} products via turbo (bulk can't handle metafields)`);
+    // Only pass metafield mappings — skip price/stock/fields (already handled by bulk)
+    const metaOnlyMappings = metafieldMappings;
+    const metaBatchSize = TURBO_BATCH_SIZE;
+    for (let mi = 0; mi < existingSingles.length; mi += metaBatchSize) {
+      if (await isJobCancelled(jobId)) break;
+      const metaBatch = existingSingles.slice(mi, mi + metaBatchSize);
+      await Promise.all(metaBatch.map(async (product) => {
+        try {
+          const ids = shopifyMap.get(product.sku);
+          if (!ids) return;
+          const metafields = buildMetafields(product.raw_data, metaOnlyMappings, shopifyDefs);
+          if (metafields.length === 0) return;
+          const updateMutation = `
+            mutation productUpdate($input: ProductInput!) {
+              productUpdate(input: $input) {
+                product { id }
+                userErrors { field message }
+              }
+            }`;
+          await shopifyGraphQL(channel, updateMutation, {
+            input: { id: ids.productId, metafields },
+          });
+        } catch (err) {
+          console.warn(`[SyncFlow] Metafield update failed for ${product.sku}:`, err);
+        }
+      }));
+    }
+    console.log(`[SyncFlow] Metafield follow-up complete`);
+  }
 
   // ── Post-bulk: new products + variant groups (regular parallel API) ──
   let processedCount = existingSingles.length;
