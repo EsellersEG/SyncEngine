@@ -407,6 +407,25 @@ export async function createOdooSaleOrder(
           productId = found[0].id;
           break;
         }
+
+        // Barcode/EAN fallback: treat numeric barcodes with/without leading zeros as equal.
+        if (!productId && field === 'barcode') {
+          const normalizedSku = normalizeBarcodeForCompare(item.sku);
+          if (normalizedSku && /^\d+$/.test(normalizedSku)) {
+            const barcodeCandidates = await odooExecute(config, uid, 'product.product', 'search_read', [
+              [['barcode', 'like', normalizedSku]]
+            ], { fields: ['id', 'barcode'], limit: 25 }) as Array<{ id: number; barcode?: string | null }>;
+
+            const normalizedMatch = barcodeCandidates.find((candidate) => (
+              normalizeBarcodeForCompare(String(candidate.barcode || '')) === normalizedSku
+            ));
+
+            if (normalizedMatch) {
+              productId = normalizedMatch.id;
+              break;
+            }
+          }
+        }
       }
 
       // Last resort: partial name match (ilike) on the first meaningful segment before "|" or "/"
@@ -496,6 +515,15 @@ export async function createOdooSaleOrder(
   const orderData = await odooExecute(config, uid, 'sale.order', 'read', [[orderId]], { fields: ['name'] }) as Array<{ name: string }>;
 
   return { odooOrderId: orderId, odooOrderName: orderData[0]?.name || `SO-${orderId}` };
+}
+
+function normalizeBarcodeForCompare(value: string): string {
+  const normalized = String(value || '').trim();
+  if (!normalized) return '';
+  // Only normalize pure numeric barcodes; alphanumeric values keep original form.
+  if (!/^\d+$/.test(normalized)) return normalized;
+  const stripped = normalized.replace(/^0+/, '');
+  return stripped || '0';
 }
 
 function getOdooProductSearchFields(mode: OdooConfig['productSearchBy']): string[] {
