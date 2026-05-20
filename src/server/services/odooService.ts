@@ -408,20 +408,20 @@ export async function createOdooSaleOrder(
           break;
         }
 
-        // Barcode/EAN fallback: treat numeric barcodes with/without leading zeros as equal.
-        if (!productId && field === 'barcode') {
+        // Barcode/EAN fallback: match ignoring leading zeros on either side
+        if (field === 'barcode') {
           const normalizedSku = normalizeBarcodeForCompare(item.sku);
           if (normalizedSku && /^\d+$/.test(normalizedSku)) {
-            const barcodeCandidates = await odooExecute(config, uid, 'product.product', 'search_read', [
+            const candidates = await odooExecute(config, uid, 'product.product', 'search_read', [
               [['barcode', 'like', normalizedSku]]
             ], { fields: ['id', 'barcode'], limit: 25 }) as Array<{ id: number; barcode?: string | null }>;
 
-            const normalizedMatch = barcodeCandidates.find((candidate) => (
-              normalizeBarcodeForCompare(String(candidate.barcode || '')) === normalizedSku
-            ));
-
-            if (normalizedMatch) {
-              productId = normalizedMatch.id;
+            const match = candidates.find(c =>
+              normalizeBarcodeForCompare(String(c.barcode || '')) === normalizedSku
+            );
+            if (match) {
+              productId = match.id;
+              console.log(`[OdooOrder] Barcode leading-zero match: "${item.sku}" → Odoo barcode "${match.barcode}" (id=${match.id})`);
               break;
             }
           }
@@ -517,12 +517,13 @@ export async function createOdooSaleOrder(
   return { odooOrderId: orderId, odooOrderName: orderData[0]?.name || `SO-${orderId}` };
 }
 
+/** Strip leading zeros from purely numeric barcodes for comparison. */
 function normalizeBarcodeForCompare(value: string): string {
-  const normalized = String(value || '').trim();
-  if (!normalized) return '';
-  // Only normalize pure numeric barcodes; alphanumeric values keep original form.
-  if (!/^\d+$/.test(normalized)) return normalized;
-  const stripped = normalized.replace(/^0+/, '');
+  const v = String(value || '').trim();
+  if (!v) return '';
+  // Only normalize pure-numeric barcodes; alphanumeric stay as-is.
+  if (!/^\d+$/.test(v)) return v;
+  const stripped = v.replace(/^0+/, '');
   return stripped || '0';
 }
 
