@@ -5,6 +5,58 @@ import { authenticate, requireAdmin, type AuthRequest } from '../middleware/auth
 const router = Router();
 router.use(authenticate);
 
+// GET /api/products/export — download products as CSV
+router.get('/export', async (req: AuthRequest, res) => {
+  try {
+    const { client_id, feed_id, search } = req.query;
+    const isAdmin = req.user!.role === 'admin';
+    const ucJoin = isAdmin ? '' : 'JOIN user_clients uc ON uc.client_id = p.client_id AND uc.user_id = $4';
+
+    const result = await query(
+      `SELECT p.sku, p.status, p.last_updated_at, p.raw_data, f.name as feed_name
+       FROM products p
+       LEFT JOIN feeds f ON p.feed_id = f.id
+       ${ucJoin}
+       WHERE ($1::uuid IS NULL OR p.client_id = $1::uuid)
+         AND ($2::uuid IS NULL OR p.feed_id = $2::uuid)
+         AND ($3::text IS NULL OR p.sku ILIKE '%' || $3 || '%')
+       ORDER BY p.last_updated_at DESC`,
+      isAdmin
+        ? [client_id || null, feed_id || null, search || null]
+        : [client_id || null, feed_id || null, search || null, req.user!.id]
+    );
+
+    // Collect all raw_data keys across products for dynamic columns
+    const allKeys = new Set<string>();
+    for (const row of result.rows) {
+      if (row.raw_data && typeof row.raw_data === 'object') {
+        Object.keys(row.raw_data).forEach(k => allKeys.add(k));
+      }
+    }
+    const dynamicKeys = Array.from(allKeys).sort();
+    const headers = ['sku', 'status', 'feed_name', 'last_updated_at', ...dynamicKeys];
+
+    const escCSV = (val: unknown) => {
+      const s = String(val ?? '');
+      return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+
+    const rows = result.rows.map(r => {
+      const base = [r.sku, r.status, r.feed_name || '', r.last_updated_at || ''];
+      const dynamic = dynamicKeys.map(k => r.raw_data?.[k] ?? '');
+      return [...base, ...dynamic].map(escCSV).join(',');
+    });
+
+    const csv = [headers.map(escCSV).join(','), ...rows].join('\n');
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="products-${new Date().toISOString().slice(0, 10)}.csv"`);
+    return res.send(csv);
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Export failed' });
+  }
+});
+
 // GET /api/products?client_id=xxx&feed_id=xxx&page=1&limit=50&search=xxx
 router.get('/', async (req: AuthRequest, res) => {
   try {

@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { api } from '../lib/api';
 import { useAuth } from '../hooks/useAuth';
 import Modal from '../components/Modal';
-import { Package, Search, RefreshCw, X, Trash2 } from 'lucide-react';
+import { Package, Search, RefreshCw, X, Trash2, Download } from 'lucide-react';
 
 interface Product {
   id: string; sku: string; feed_name: string; status: string;
@@ -74,6 +74,28 @@ export default function ProductsPage() {
     }
   }
 
+  async function handleExportCSV() {
+    try {
+      const params = new URLSearchParams();
+      if (clientFilter) params.set('client_id', clientFilter);
+      if (feedFilter) params.set('feed_id', feedFilter);
+      if (debouncedSearch) params.set('search', debouncedSearch);
+      const res = await fetch(`/api/products/export?${params}`, {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+      });
+      if (!res.ok) throw new Error('Export failed');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `products-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Export failed');
+    }
+  }
+
   async function handleBulkDelete() {
     const filterDesc = feedFilter ? feeds.find(f => f.id === feedFilter)?.name : clientFilter ? clients.find(c => c.id === clientFilter)?.name : debouncedSearch ? `search "${debouncedSearch}"` : '';
     if (!filterDesc) { alert('Select a feed, client, or search term first to bulk delete.'); return; }
@@ -139,6 +161,9 @@ export default function ProductsPage() {
               <Trash2 size={13} /> Delete {total.toLocaleString()}
             </button>
           )}
+          <button className="btn btn-secondary btn-sm" onClick={handleExportCSV} disabled={total === 0}>
+            <Download size={13} /> Export CSV
+          </button>
         </div>
       </div>
 

@@ -82,6 +82,7 @@ router.post('/', async (req: AuthRequest, res) => {
 router.patch('/:id', async (req, res) => {
   try {
     const {
+      client_id,
       name,
       type,
       spreadsheet_id,
@@ -107,26 +108,27 @@ router.patch('/:id', async (req, res) => {
         : null;
     const result = await query(
       `UPDATE feeds SET
-        name = COALESCE($1, name),
-        type = COALESCE($2, type),
-        spreadsheet_id = COALESCE($3, spreadsheet_id),
-        sheet_name = COALESCE($4, sheet_name),
-        header_row = COALESCE($5, header_row),
-        is_active = COALESCE($6, is_active),
-        odoo_url = COALESCE($7, odoo_url),
-        odoo_database = COALESCE($8, odoo_database),
-        odoo_username = COALESCE($9, odoo_username),
-        odoo_api_key = COALESCE(NULLIF($10, ''), odoo_api_key),
-        odoo_search_by = COALESCE($11, odoo_search_by),
-        odoo_warehouse_id = $12,
-        odoo_warehouse_name = COALESCE($13, odoo_warehouse_name),
-        sync_interval_minutes = $14,
-        order_tax_included_percent = $15,
-        odoo_force_order = COALESCE($16, odoo_force_order),
-        shopify_channel_id = COALESCE($17, shopify_channel_id),
+        client_id = COALESCE($1, client_id),
+        name = COALESCE($2, name),
+        type = COALESCE($3, type),
+        spreadsheet_id = COALESCE($4, spreadsheet_id),
+        sheet_name = COALESCE($5, sheet_name),
+        header_row = COALESCE($6, header_row),
+        is_active = COALESCE($7, is_active),
+        odoo_url = COALESCE($8, odoo_url),
+        odoo_database = COALESCE($9, odoo_database),
+        odoo_username = COALESCE($10, odoo_username),
+        odoo_api_key = COALESCE(NULLIF($11, ''), odoo_api_key),
+        odoo_search_by = COALESCE($12, odoo_search_by),
+        odoo_warehouse_id = $13,
+        odoo_warehouse_name = COALESCE($14, odoo_warehouse_name),
+        sync_interval_minutes = $15,
+        order_tax_included_percent = $16,
+        odoo_force_order = COALESCE($17, odoo_force_order),
+        shopify_channel_id = COALESCE($18, shopify_channel_id),
         updated_at = NOW()
-       WHERE id = $18 RETURNING *`,
-      [name, type, spreadsheet_id, sheet_name, header_row, is_active, odoo_url, odoo_database, odoo_username, odoo_api_key, normalizedOdooSearchBy, odoo_warehouse_id !== undefined ? (odoo_warehouse_id ? parseInt(odoo_warehouse_id) : null) : null, odoo_warehouse_name || null, sync_interval_minutes ?? null, order_tax_included_percent !== undefined ? (order_tax_included_percent ? parseFloat(order_tax_included_percent) : null) : null, odoo_force_order !== undefined ? !!odoo_force_order : null, shopify_channel_id || null, req.params.id]
+       WHERE id = $19 RETURNING *`,
+      [client_id || null, name, type, spreadsheet_id, sheet_name, header_row, is_active, odoo_url, odoo_database, odoo_username, odoo_api_key, normalizedOdooSearchBy, odoo_warehouse_id !== undefined ? (odoo_warehouse_id ? parseInt(odoo_warehouse_id) : null) : null, odoo_warehouse_name || null, sync_interval_minutes ?? null, order_tax_included_percent !== undefined ? (order_tax_included_percent ? parseFloat(order_tax_included_percent) : null) : null, odoo_force_order !== undefined ? !!odoo_force_order : null, shopify_channel_id || null, req.params.id]
     );
     if (!result.rows[0]) return res.status(404).json({ error: 'Feed not found' });
     return res.json(result.rows[0]);
@@ -139,6 +141,8 @@ router.patch('/:id', async (req, res) => {
 // DELETE /api/feeds/:id
 router.delete('/:id', async (req, res) => {
   try {
+    // Delete sync_jobs referencing this feed (FK has no CASCADE)
+    await query('DELETE FROM sync_jobs WHERE feed_id = $1', [req.params.id]);
     await query('DELETE FROM feeds WHERE id = $1', [req.params.id]);
     return res.json({ success: true });
   } catch (err) {
