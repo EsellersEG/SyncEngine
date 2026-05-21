@@ -312,9 +312,9 @@ function isValidImageUrl(url: string): boolean {
   }
 }
 
-// Transform Google Drive URLs to direct download format that Shopify can fetch server-side.
-// The uc?export=download endpoint serves the original file with correct Content-Type
-// and Content-Disposition headers (including original filename with extension).
+// Transform Google Drive URLs to direct image-serving format that Shopify can fetch.
+// Uses lh3 image proxy with =s0 (full resolution) which always serves with correct
+// Content-Type headers and never shows virus-scan HTML pages.
 function toDirectImageUrl(url: string): string {
   let fileId: string | null = null;
 
@@ -328,20 +328,21 @@ function toDirectImageUrl(url: string): string {
     if (driveOpenMatch) fileId = driveOpenMatch[1];
   }
 
-  // https://drive.google.com/uc?id=FILE_ID (already a direct link, just ensure export=download)
+  // https://drive.google.com/uc?id=FILE_ID
   if (!fileId) {
     const driveUcMatch = url.match(/drive\.google\.com\/uc\?.*id=([^&]+)/);
     if (driveUcMatch) fileId = driveUcMatch[1];
   }
 
-  // https://lh3.googleusercontent.com/d/FILE_ID
+  // https://lh3.googleusercontent.com/d/FILE_ID (with or without params)
   if (!fileId) {
     const lh3Match = url.match(/lh3\.googleusercontent\.com\/d\/([^=/?]+)/);
     if (lh3Match) fileId = lh3Match[1];
   }
 
   if (fileId) {
-    return `https://drive.google.com/uc?id=${fileId}&export=download`;
+    // Use lh3 proxy with =s0 for full resolution — serves proper Content-Type, no HTML pages
+    return `https://lh3.googleusercontent.com/d/${fileId}=s0`;
   }
   return url;
 }
