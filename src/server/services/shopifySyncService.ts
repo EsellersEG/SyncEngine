@@ -312,6 +312,11 @@ function isValidImageUrl(url: string): boolean {
   }
 }
 
+// Check if a URL is a Google Drive / lh3 URL (needs staged upload for Shopify)
+function isGoogleDriveUrl(url: string): boolean {
+  return /drive\.google\.com|lh3\.googleusercontent\.com|drive\.usercontent\.google\.com/.test(url);
+}
+
 // Transform Google Drive URLs to direct image-serving format that Shopify can fetch.
 // Uses lh3 image proxy with =s0 (full resolution) which always serves with correct
 // Content-Type headers and never shows virus-scan HTML pages.
@@ -345,6 +350,93 @@ function toDirectImageUrl(url: string): string {
     return `https://lh3.googleusercontent.com/d/${fileId}=s0`;
   }
   return url;
+}
+
+// ── Staged Upload: fetch image server-side then upload to Shopify CDN ──────
+// This bypasses URL extension issues with Google Drive/lh3 URLs.
+async function uploadImageViaStaged(channel: Channel, imageUrl: string): Promise<string | null> {
+  try {
+    // 1. Fetch the image from Google (follow redirects)
+    const imgRes = await fetch(imageUrl, { redirect: 'follow' });
+    if (!imgRes.ok) {
+      console.warn(`[SyncFlow] Failed to fetch image ${imageUrl}: ${imgRes.status}`);
+      return null;
+    }
+    const contentType = imgRes.headers.get('content-type') || 'image/jpeg';
+    const buffer = Buffer.from(await imgRes.arrayBuffer());
+    const fileSize = buffer.length;
+    if (fileSize < 100) {
+      console.warn(`[SyncFlow] Image too small (${fileSize}b), likely not an image: ${imageUrl}`);
+      return null;
+    }
+
+    // Determine extension from content type
+    const extMap: Record<string, string> = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif', 'image/webp': '.webp' };
+    const ext = extMap[contentType.split(';')[0].trim()] || '.jpg';
+    const filename = `product-image${ext}`;
+
+    // 2. Create staged upload target on Shopify
+    const stagedResult = await shopifyGraphQL(channel, `
+      mutation stagedUploadsCreate($input: [StagedUploadInput!]!) {
+        stagedUploadsCreate(input: $input) {
+          stagedTargets {
+            url
+            resourceUrl
+            parameters { name value }
+          }
+          userErrors { field message }
+        }
+      }`, {
+      input: [{
+        resource: 'IMAGE',
+        filename,
+        mimeType: contentType.split(';')[0].trim(),
+        fileSize: String(fileSize),
+        httpMethod: 'POST',
+      }],
+    }) as { stagedUploadsCreate: { stagedTargets: Array<{ url: string; resourceUrl: string; parameters: Array<{ name: string; value: string }> }>; userErrors: Array<{ message: string }> } };
+
+    const target = stagedResult.stagedUploadsCreate?.stagedTargets?.[0];
+    if (!target) {
+      const errs = stagedResult.stagedUploadsCreate?.userErrors;
+      console.warn(`[SyncFlow] Staged upload creation failed:`, errs);
+      return null;
+    }
+
+    // 3. Upload the file to Shopify's staged URL (multipart form)
+    const formData = new FormData();
+    for (const param of target.parameters) {
+      formData.append(param.name, param.value);
+    }
+    formData.append('file', new Blob([buffer], { type: contentType }), filename);
+
+    const uploadRes = await fetch(target.url, { method: 'POST', body: formData });
+    if (!uploadRes.ok && uploadRes.status !== 201) {
+      console.warn(`[SyncFlow] Staged upload POST failed: ${uploadRes.status}`);
+      return null;
+    }
+
+    // 4. Return the resourceUrl — this is what Shopify uses as originalSource
+    return target.resourceUrl;
+  } catch (err) {
+    console.error(`[SyncFlow] Staged upload error for ${imageUrl}:`, err);
+    return null;
+  }
+}
+
+// Process image URLs: use staged upload for Google Drive URLs, direct URL for others
+async function resolveImageUrls(channel: Channel, urls: string[]): Promise<string[]> {
+  const resolved: string[] = [];
+  for (const url of urls) {
+    if (isGoogleDriveUrl(url)) {
+      const directUrl = toDirectImageUrl(url);
+      const stagedUrl = await uploadImageViaStaged(channel, directUrl);
+      if (stagedUrl) resolved.push(stagedUrl);
+    } else {
+      resolved.push(url);
+    }
+  }
+  return resolved;
 }
 
 async function updateInventoryItemDetails(
@@ -855,11 +947,13 @@ async function syncProductTurbo(
     if (withImages) {
       const imageSource = mapped.variant_image || mapped.image_url;
       if (imageSource) {
-        const urls = String(imageSource).split(',').map(u => u.trim()).filter(isValidImageUrl).map(toDirectImageUrl);
-        if (urls.length > 0) {
+        const rawUrls = String(imageSource).split(',').map(u => u.trim()).filter(isValidImageUrl);
+        if (rawUrls.length > 0) {
           promises.push(
-            deleteExistingProductMedia(channel, shopifyIds.productId).then(() =>
-              shopifyGraphQL(channel, `
+            resolveImageUrls(channel, rawUrls).then(async (resolvedUrls) => {
+              if (resolvedUrls.length === 0) return;
+              await deleteExistingProductMedia(channel, shopifyIds.productId);
+              await shopifyGraphQL(channel, `
                 mutation productCreateMedia($productId: ID!, $media: [CreateMediaInput!]!) {
                   productCreateMedia(productId: $productId, media: $media) {
                     media { id }
@@ -867,9 +961,9 @@ async function syncProductTurbo(
                   }
                 }`, {
                 productId: shopifyIds.productId,
-                media: urls.map(url => ({ originalSource: url, mediaContentType: 'IMAGE' })),
-              })
-            )
+                media: resolvedUrls.map(url => ({ originalSource: url, mediaContentType: 'IMAGE' })),
+              });
+            })
           );
         }
       }
@@ -1240,21 +1334,24 @@ async function syncGroupedProduct(
 
         const updateImageSource = mapped.variant_image || mapped.image_url;
         if (withImages && updateImageSource) {
-          const urls = String(updateImageSource).split(',').map(u => u.trim()).filter(isValidImageUrl).map(toDirectImageUrl);
-          if (urls.length > 0) {
-            // Delete existing images first, then upload new ones
-            await deleteExistingProductMedia(channel, shopifyIds.productId);
-            const mediaMutation = `
-              mutation productCreateMedia($productId: ID!, $media: [CreateMediaInput!]!) {
-                productCreateMedia(productId: $productId, media: $media) {
-                  media { id }
-                  mediaUserErrors { field message }
-                }
-              }`;
-            updatePromises.push(shopifyGraphQL(channel, mediaMutation, {
-              productId: shopifyIds.productId,
-              media: urls.map(url => ({ originalSource: url, mediaContentType: 'IMAGE' })),
-            }));
+          const rawUrls = String(updateImageSource).split(',').map(u => u.trim()).filter(isValidImageUrl);
+          if (rawUrls.length > 0) {
+            const resolvedUrls = await resolveImageUrls(channel, rawUrls);
+            if (resolvedUrls.length > 0) {
+              // Delete existing images first, then upload new ones
+              await deleteExistingProductMedia(channel, shopifyIds.productId);
+              const mediaMutation = `
+                mutation productCreateMedia($productId: ID!, $media: [CreateMediaInput!]!) {
+                  productCreateMedia(productId: $productId, media: $media) {
+                    media { id }
+                    mediaUserErrors { field message }
+                  }
+                }`;
+              updatePromises.push(shopifyGraphQL(channel, mediaMutation, {
+                productId: shopifyIds.productId,
+                media: resolvedUrls.map(url => ({ originalSource: url, mediaContentType: 'IMAGE' })),
+              }));
+            }
           }
         }
 
@@ -1303,12 +1400,13 @@ async function createShopifyProduct(channel: Channel, sku: string, mapped: Recor
     }
   }
 
-  // Media (images) — handles comma-separated URLs
+  // Media (images) — handles comma-separated URLs, uses staged upload for Google Drive
   const media: Array<{ originalSource: string; mediaContentType: string }> = [];
   const createImageSource = mapped.variant_image || mapped.image_url;
   if (withImages && createImageSource) {
-    const urls = String(createImageSource).split(',').map(u => u.trim()).filter(isValidImageUrl).map(toDirectImageUrl);
-    for (const url of urls) {
+    const rawUrls = String(createImageSource).split(',').map(u => u.trim()).filter(isValidImageUrl);
+    const resolvedUrls = await resolveImageUrls(channel, rawUrls);
+    for (const url of resolvedUrls) {
       media.push({ originalSource: url, mediaContentType: 'IMAGE' });
     }
   }
@@ -1578,8 +1676,9 @@ async function syncVariantGroup(
   const fileMap = new Map<string, { originalSource: string; contentType: string }>();
   if (withImages) {
     for (const entry of mappedRows) {
-      const urls = String(entry.mapped.image_url || '').split(',').map(url => url.trim()).filter(isValidImageUrl).map(toDirectImageUrl);
-      for (const url of urls) {
+      const rawUrls = String(entry.mapped.image_url || '').split(',').map(url => url.trim()).filter(isValidImageUrl);
+      const resolvedUrls = await resolveImageUrls(channel, rawUrls);
+      for (const url of resolvedUrls) {
         if (!fileMap.has(url)) fileMap.set(url, { originalSource: url, contentType: 'IMAGE' });
       }
     }
@@ -1632,7 +1731,12 @@ async function syncVariantGroup(
       }
 
       const variantImageSource = entry.mapped.variant_image || entry.mapped.image_url;
-      const variantImage = withImages ? String(variantImageSource || '').split(',').map(url => url.trim()).filter(isValidImageUrl).map(toDirectImageUrl).find(Boolean) : null;
+      let variantImage: string | null = null;
+      if (withImages && variantImageSource) {
+        const rawVarUrls = String(variantImageSource).split(',').map(url => url.trim()).filter(isValidImageUrl);
+        const resolvedVarUrls = await resolveImageUrls(channel, rawVarUrls);
+        variantImage = resolvedVarUrls[0] || null;
+      }
       if (variantImage) {
         variant.file = { originalSource: variantImage, contentType: 'IMAGE' };
       }
