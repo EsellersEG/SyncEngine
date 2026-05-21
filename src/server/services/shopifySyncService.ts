@@ -354,20 +354,18 @@ function toDirectImageUrl(url: string): string {
 
 // ── Staged Upload: fetch image server-side then upload to Shopify CDN ──────
 // This bypasses URL extension issues with Google Drive/lh3 URLs.
-async function uploadImageViaStaged(channel: Channel, imageUrl: string): Promise<string | null> {
+async function uploadImageViaStaged(channel: Channel, imageUrl: string): Promise<string> {
   try {
     // 1. Fetch the image from Google (follow redirects)
     const imgRes = await fetch(imageUrl, { redirect: 'follow' });
     if (!imgRes.ok) {
-      console.warn(`[SyncFlow] Failed to fetch image ${imageUrl}: ${imgRes.status}`);
-      return null;
+      throw new Error(`Failed to fetch image (${imgRes.status})`);
     }
     const contentType = imgRes.headers.get('content-type') || 'image/jpeg';
     const buffer = Buffer.from(await imgRes.arrayBuffer());
     const fileSize = buffer.length;
     if (fileSize < 100) {
-      console.warn(`[SyncFlow] Image too small (${fileSize}b), likely not an image: ${imageUrl}`);
-      return null;
+      throw new Error(`Fetched payload is too small (${fileSize}b)`);
     }
 
     // Determine extension from content type
@@ -388,7 +386,7 @@ async function uploadImageViaStaged(channel: Channel, imageUrl: string): Promise
         }
       }`, {
       input: [{
-        resource: 'IMAGE',
+        resource: 'PRODUCT_IMAGE',
         filename,
         mimeType: contentType.split(';')[0].trim(),
         fileSize: String(fileSize),
@@ -399,8 +397,7 @@ async function uploadImageViaStaged(channel: Channel, imageUrl: string): Promise
     const target = stagedResult.stagedUploadsCreate?.stagedTargets?.[0];
     if (!target) {
       const errs = stagedResult.stagedUploadsCreate?.userErrors;
-      console.warn(`[SyncFlow] Staged upload creation failed:`, errs);
-      return null;
+      throw new Error(`Staged upload target missing: ${(errs || []).map(err => err.message).join('; ') || 'unknown error'}`);
     }
 
     // 3. Upload the file to Shopify's staged URL (multipart form)
@@ -411,16 +408,17 @@ async function uploadImageViaStaged(channel: Channel, imageUrl: string): Promise
     formData.append('file', new Blob([buffer], { type: contentType }), filename);
 
     const uploadRes = await fetch(target.url, { method: 'POST', body: formData });
-    if (!uploadRes.ok && uploadRes.status !== 201) {
-      console.warn(`[SyncFlow] Staged upload POST failed: ${uploadRes.status}`);
-      return null;
+    if (uploadRes.status < 200 || uploadRes.status >= 300) {
+      const body = await uploadRes.text().catch(() => '');
+      throw new Error(`Staged upload POST failed (${uploadRes.status}): ${body.substring(0, 300)}`);
     }
 
     // 4. Return the resourceUrl — this is what Shopify uses as originalSource
     return target.resourceUrl;
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
     console.error(`[SyncFlow] Staged upload error for ${imageUrl}:`, err);
-    return null;
+    throw new Error(`Image upload failed for ${imageUrl}: ${message}`);
   }
 }
 
@@ -430,8 +428,7 @@ async function resolveImageUrls(channel: Channel, urls: string[]): Promise<strin
   for (const url of urls) {
     if (isGoogleDriveUrl(url)) {
       const directUrl = toDirectImageUrl(url);
-      const stagedUrl = await uploadImageViaStaged(channel, directUrl);
-      if (stagedUrl) resolved.push(stagedUrl);
+      resolved.push(await uploadImageViaStaged(channel, directUrl));
     } else {
       resolved.push(url);
     }
@@ -538,9 +535,7 @@ async function getProductVariantInventoryMap(channel: Channel, productId: string
   return inventoryMap;
 }
 
-// ── Delete all existing media from a product ───────────────────────────────
-async function deleteExistingProductMedia(channel: Channel, productId: string): Promise<void> {
-  // Fetch all media IDs for the product
+async function getProductMediaIds(channel: Channel, productId: string): Promise<string[]> {
   const mediaQuery = `
     query getProductMedia($id: ID!) {
       product(id: $id) {
@@ -549,13 +544,17 @@ async function deleteExistingProductMedia(channel: Channel, productId: string): 
         }
       }
     }`;
+
   const mediaResult = await shopifyGraphQL(channel, mediaQuery, { id: productId }) as {
     product?: { media?: { edges: Array<{ node: { id: string } }> } }
   };
-  const mediaIds = mediaResult.product?.media?.edges?.map(e => e.node.id) || [];
+
+  return mediaResult.product?.media?.edges?.map(e => e.node.id) || [];
+}
+
+async function deleteProductMedia(channel: Channel, productId: string, mediaIds: string[]): Promise<void> {
   if (mediaIds.length === 0) return;
 
-  // Delete all existing media
   const deleteMutation = `
     mutation productDeleteMedia($productId: ID!, $mediaIds: [ID!]!) {
       productDeleteMedia(productId: $productId, mediaIds: $mediaIds) {
@@ -563,7 +562,67 @@ async function deleteExistingProductMedia(channel: Channel, productId: string): 
         mediaUserErrors { field message }
       }
     }`;
-  await shopifyGraphQL(channel, deleteMutation, { productId, mediaIds });
+
+  const result = await shopifyGraphQL(channel, deleteMutation, { productId, mediaIds }) as {
+    productDeleteMedia?: {
+      mediaUserErrors?: Array<{ field?: string[]; message: string }>;
+    };
+  };
+
+  const errors = result.productDeleteMedia?.mediaUserErrors || [];
+  if (errors.length > 0) {
+    const details = errors.map(err => {
+      const fieldPath = Array.isArray(err.field) ? err.field.join('.') : (err.field || '');
+      return `${err.message}${fieldPath ? ` [field: ${fieldPath}]` : ''}`;
+    }).join('; ');
+    throw new Error(`Media delete failed: ${details}`);
+  }
+}
+
+async function deleteExistingProductMedia(channel: Channel, productId: string): Promise<void> {
+  const mediaIds = await getProductMediaIds(channel, productId);
+  await deleteProductMedia(channel, productId, mediaIds);
+}
+
+async function createProductMedia(channel: Channel, productId: string, sourceUrls: string[]): Promise<void> {
+  if (sourceUrls.length === 0) return;
+
+  const result = await shopifyGraphQL(channel, `
+    mutation productCreateMedia($productId: ID!, $media: [CreateMediaInput!]!) {
+      productCreateMedia(productId: $productId, media: $media) {
+        media { id }
+        mediaUserErrors { field message }
+      }
+    }`, {
+    productId,
+    media: sourceUrls.map(url => ({ originalSource: url, mediaContentType: 'IMAGE' })),
+  }) as {
+    productCreateMedia?: {
+      media?: Array<{ id: string }>;
+      mediaUserErrors?: Array<{ field?: string[]; message: string }>;
+    };
+  };
+
+  const errors = result.productCreateMedia?.mediaUserErrors || [];
+  if (errors.length > 0) {
+    const details = errors.map(err => {
+      const fieldPath = Array.isArray(err.field) ? err.field.join('.') : (err.field || '');
+      return `${err.message}${fieldPath ? ` [field: ${fieldPath}]` : ''}`;
+    }).join('; ');
+    throw new Error(`Media upload failed: ${details}`);
+  }
+
+  if (!result.productCreateMedia?.media?.length) {
+    throw new Error('Media upload failed: Shopify returned no media objects');
+  }
+}
+
+async function replaceProductMedia(channel: Channel, productId: string, sourceUrls: string[]): Promise<void> {
+  if (sourceUrls.length === 0) return;
+
+  const existingMediaIds = await getProductMediaIds(channel, productId);
+  await createProductMedia(channel, productId, sourceUrls);
+  await deleteProductMedia(channel, productId, existingMediaIds);
 }
 
 // ── SKU → Shopify ID lookup via GraphQL ────────────────────────────────────
@@ -943,7 +1002,7 @@ async function syncProductTurbo(
       console.warn(`[SyncFlow] No locationId for stock update of ${product.sku}`);
     }
 
-    // 5. Image sync (when withImages=true) — delete old, upload new in parallel with other mutations
+    // 5. Image sync (when withImages=true) — keep old media until replacement is attached
     if (withImages) {
       const imageSource = mapped.variant_image || mapped.image_url;
       if (imageSource) {
@@ -952,17 +1011,7 @@ async function syncProductTurbo(
           promises.push(
             resolveImageUrls(channel, rawUrls).then(async (resolvedUrls) => {
               if (resolvedUrls.length === 0) return;
-              await deleteExistingProductMedia(channel, shopifyIds.productId);
-              await shopifyGraphQL(channel, `
-                mutation productCreateMedia($productId: ID!, $media: [CreateMediaInput!]!) {
-                  productCreateMedia(productId: $productId, media: $media) {
-                    media { id }
-                    mediaUserErrors { field message }
-                  }
-                }`, {
-                productId: shopifyIds.productId,
-                media: resolvedUrls.map(url => ({ originalSource: url, mediaContentType: 'IMAGE' })),
-              });
+              await replaceProductMedia(channel, shopifyIds.productId, resolvedUrls);
             })
           );
         }
@@ -1338,19 +1387,7 @@ async function syncGroupedProduct(
           if (rawUrls.length > 0) {
             const resolvedUrls = await resolveImageUrls(channel, rawUrls);
             if (resolvedUrls.length > 0) {
-              // Delete existing images first, then upload new ones
-              await deleteExistingProductMedia(channel, shopifyIds.productId);
-              const mediaMutation = `
-                mutation productCreateMedia($productId: ID!, $media: [CreateMediaInput!]!) {
-                  productCreateMedia(productId: $productId, media: $media) {
-                    media { id }
-                    mediaUserErrors { field message }
-                  }
-                }`;
-              updatePromises.push(shopifyGraphQL(channel, mediaMutation, {
-                productId: shopifyIds.productId,
-                media: resolvedUrls.map(url => ({ originalSource: url, mediaContentType: 'IMAGE' })),
-              }));
+              updatePromises.push(replaceProductMedia(channel, shopifyIds.productId, resolvedUrls));
             }
           }
         }
@@ -1765,10 +1802,9 @@ async function syncVariantGroup(
   if (metafields.length > 0) input.metafields = metafields;
   if (fileMap.size > 0) input.files = Array.from(fileMap.values());
 
-  // Delete existing images before uploading new ones (only for existing products with images)
-  if (existingProductId && withImages && fileMap.size > 0) {
-    await deleteExistingProductMedia(channel, existingProductId);
-  }
+  const existingMediaIdsToDelete = existingProductId && withImages && fileMap.size > 0
+    ? await getProductMediaIds(channel, existingProductId)
+    : [];
 
   const mutation = `
     mutation productSetSync($input: ProductSetInput!, $synchronous: Boolean!) {
@@ -1794,6 +1830,10 @@ async function syncVariantGroup(
       return `${err.message}${fieldPath ? ` [field: ${fieldPath}]` : ''}`;
     }).join('; ');
     throw new Error(details);
+  }
+
+  if (existingProductId && existingMediaIdsToDelete.length > 0) {
+    await deleteProductMedia(channel, existingProductId, existingMediaIdsToDelete);
   }
 
   const syncedProductId = result.productSet.product?.id || existingProductId;
