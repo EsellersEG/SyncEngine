@@ -1686,6 +1686,23 @@ async function syncVariantGroup(
 
   const metafields = buildMetafields(first.row.raw_data, metafieldMappings, shopifyDefs);
 
+  // Pre-resolve variant images (needs await, can't do inside sync .map)
+  const variantResolvedImages: (string | null)[] = [];
+  if (withImages) {
+    for (const entry of mappedRows) {
+      const variantImageSource = entry.mapped.variant_image || entry.mapped.image_url;
+      if (variantImageSource) {
+        const rawVarUrls = String(variantImageSource).split(',').map(url => url.trim()).filter(isValidImageUrl);
+        const resolvedVarUrls = await resolveImageUrls(channel, rawVarUrls);
+        variantResolvedImages.push(resolvedVarUrls[0] || null);
+      } else {
+        variantResolvedImages.push(null);
+      }
+    }
+  } else {
+    mappedRows.forEach(() => variantResolvedImages.push(null));
+  }
+
   const input: Record<string, unknown> = {
     title: first.mapped.title || first.row.sku,
     handle: group.handle,
@@ -1730,13 +1747,7 @@ async function syncVariantGroup(
         }];
       }
 
-      const variantImageSource = entry.mapped.variant_image || entry.mapped.image_url;
-      let variantImage: string | null = null;
-      if (withImages && variantImageSource) {
-        const rawVarUrls = String(variantImageSource).split(',').map(url => url.trim()).filter(isValidImageUrl);
-        const resolvedVarUrls = await resolveImageUrls(channel, rawVarUrls);
-        variantImage = resolvedVarUrls[0] || null;
-      }
+      const variantImage = variantResolvedImages[index] || null;
       if (variantImage) {
         variant.file = { originalSource: variantImage, contentType: 'IMAGE' };
       }
