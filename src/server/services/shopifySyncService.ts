@@ -317,33 +317,31 @@ function isGoogleDriveUrl(url: string): boolean {
   return /drive\.google\.com|lh3\.googleusercontent\.com|drive\.usercontent\.google\.com/.test(url);
 }
 
+function extractGoogleFileId(url: string): string | null {
+  // https://drive.google.com/file/d/FILE_ID/view?usp=sharing
+  const driveFileMatch = url.match(/drive\.google\.com\/file\/d\/([^/?]+)/);
+  if (driveFileMatch) return driveFileMatch[1];
+
+  // https://drive.google.com/open?id=FILE_ID
+  const driveOpenMatch = url.match(/drive\.google\.com\/open\?id=([^&]+)/);
+  if (driveOpenMatch) return driveOpenMatch[1];
+
+  // https://drive.google.com/uc?id=FILE_ID
+  const driveUcMatch = url.match(/drive\.google\.com\/uc\?.*id=([^&]+)/);
+  if (driveUcMatch) return driveUcMatch[1];
+
+  // https://lh3.googleusercontent.com/d/FILE_ID
+  const lh3Match = url.match(/lh3\.googleusercontent\.com\/d\/([^=/?]+)/);
+  if (lh3Match) return lh3Match[1];
+
+  return null;
+}
+
 // Transform Google Drive URLs to direct image-serving format that Shopify can fetch.
 // Uses lh3 image proxy with =s0 (full resolution) which always serves with correct
 // Content-Type headers and never shows virus-scan HTML pages.
 function toDirectImageUrl(url: string): string {
-  let fileId: string | null = null;
-
-  // https://drive.google.com/file/d/FILE_ID/view?usp=sharing
-  const driveFileMatch = url.match(/drive\.google\.com\/file\/d\/([^/?]+)/);
-  if (driveFileMatch) fileId = driveFileMatch[1];
-
-  // https://drive.google.com/open?id=FILE_ID
-  if (!fileId) {
-    const driveOpenMatch = url.match(/drive\.google\.com\/open\?id=([^&]+)/);
-    if (driveOpenMatch) fileId = driveOpenMatch[1];
-  }
-
-  // https://drive.google.com/uc?id=FILE_ID
-  if (!fileId) {
-    const driveUcMatch = url.match(/drive\.google\.com\/uc\?.*id=([^&]+)/);
-    if (driveUcMatch) fileId = driveUcMatch[1];
-  }
-
-  // https://lh3.googleusercontent.com/d/FILE_ID (with or without params)
-  if (!fileId) {
-    const lh3Match = url.match(/lh3\.googleusercontent\.com\/d\/([^=/?]+)/);
-    if (lh3Match) fileId = lh3Match[1];
-  }
+  const fileId = extractGoogleFileId(url);
 
   if (fileId) {
     // Use lh3 proxy with =s0 for full resolution — serves proper Content-Type, no HTML pages
@@ -362,6 +360,11 @@ async function uploadImageViaStaged(channel: Channel, imageUrl: string): Promise
       throw new Error(`Failed to fetch image (${imgRes.status})`);
     }
     const contentType = imgRes.headers.get('content-type') || 'image/jpeg';
+    const normalizedContentType = contentType.split(';')[0].trim().toLowerCase();
+    if (!normalizedContentType.startsWith('image/')) {
+      const bodyPreview = await imgRes.text().catch(() => '');
+      throw new Error(`Source is not an image (content-type=${contentType}, body=${bodyPreview.substring(0, 120)})`);
+    }
     const buffer = Buffer.from(await imgRes.arrayBuffer());
     const fileSize = buffer.length;
     if (fileSize < 100) {
@@ -370,7 +373,7 @@ async function uploadImageViaStaged(channel: Channel, imageUrl: string): Promise
 
     // Determine extension from content type
     const extMap: Record<string, string> = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif', 'image/webp': '.webp' };
-    const ext = extMap[contentType.split(';')[0].trim()] || '.jpg';
+    const ext = extMap[normalizedContentType] || '.jpg';
     const filename = `product-image${ext}`;
 
     // 2. Create staged upload target on Shopify
@@ -388,16 +391,17 @@ async function uploadImageViaStaged(channel: Channel, imageUrl: string): Promise
       input: [{
         resource: 'PRODUCT_IMAGE',
         filename,
-        mimeType: contentType.split(';')[0].trim(),
+        mimeType: normalizedContentType,
         fileSize: String(fileSize),
         httpMethod: 'POST',
       }],
     }) as { stagedUploadsCreate: { stagedTargets: Array<{ url: string; resourceUrl: string; parameters: Array<{ name: string; value: string }> }>; userErrors: Array<{ message: string }> } };
 
     const target = stagedResult.stagedUploadsCreate?.stagedTargets?.[0];
-    if (!target) {
+    if (!target || !target.url || !target.resourceUrl) {
       const errs = stagedResult.stagedUploadsCreate?.userErrors;
-      throw new Error(`Staged upload target missing: ${(errs || []).map(err => err.message).join('; ') || 'unknown error'}`);
+      const targetDebug = target ? `target.url=${String(target.url)} target.resourceUrl=${String(target.resourceUrl)}` : 'target=null';
+      throw new Error(`Staged upload target missing/invalid: ${targetDebug}; ${(errs || []).map(err => err.message).join('; ') || 'unknown error'}`);
     }
 
     // 3. Upload the file to Shopify's staged URL (multipart form)
@@ -427,8 +431,30 @@ async function resolveImageUrls(channel: Channel, urls: string[]): Promise<strin
   const resolved: string[] = [];
   for (const url of urls) {
     if (isGoogleDriveUrl(url)) {
-      const directUrl = toDirectImageUrl(url);
-      resolved.push(await uploadImageViaStaged(channel, directUrl));
+      const fileId = extractGoogleFileId(url);
+      const candidates = [
+        toDirectImageUrl(url),
+        ...(fileId ? [
+          `https://drive.google.com/uc?export=download&id=${fileId}`,
+          `https://drive.google.com/thumbnail?id=${fileId}&sz=w2048`,
+        ] : []),
+      ];
+
+      let uploaded: string | null = null;
+      let lastErr: string | null = null;
+      for (const candidate of candidates) {
+        try {
+          uploaded = await uploadImageViaStaged(channel, candidate);
+          break;
+        } catch (err) {
+          lastErr = err instanceof Error ? err.message : String(err);
+        }
+      }
+
+      if (!uploaded) {
+        throw new Error(lastErr || `Failed to upload Google image: ${url}`);
+      }
+      resolved.push(uploaded);
     } else {
       resolved.push(url);
     }
