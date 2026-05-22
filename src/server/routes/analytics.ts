@@ -53,6 +53,13 @@ router.get('/', async (req: AuthRequest, res) => {
     const dateCondition = buildDateCondition('o');
     const jobDateCondition = buildDateCondition('sj');
 
+    // ─── Detect store currency from most recent order ──────────────────
+    const currencyResult = await query(
+      `SELECT raw_data->>'currency' as currency FROM orders WHERE client_id = $1 ORDER BY created_at DESC LIMIT 1`,
+      [resolvedClientId]
+    );
+    const storeCurrency = currencyResult.rows[0]?.currency || 'USD';
+
     // ─── Order Analysis ───────────────────────────────────────────────────
 
     // Summary stats
@@ -204,6 +211,7 @@ router.get('/', async (req: AuthRequest, res) => {
     const summary = summaryResult.rows[0] || { total_orders: 0, total_revenue: 0, avg_order_value: 0 };
 
     return res.json({
+      currency: storeCurrency,
       summary: {
         total_orders: summary.total_orders,
         total_revenue: parseFloat(summary.total_revenue) || 0,

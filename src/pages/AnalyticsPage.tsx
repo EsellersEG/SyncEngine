@@ -8,6 +8,7 @@ import {
 import { TrendingUp, ShoppingBag, DollarSign, Package, Zap, BarChart3 } from 'lucide-react';
 
 interface AnalyticsData {
+  currency: string;
   summary: { total_orders: number; total_revenue: number; avg_order_value: number };
   order_status: Array<{ status: string; count: number }>;
   financial_status: Array<{ financial_status: string; count: number }>;
@@ -87,7 +88,14 @@ export default function AnalyticsPage() {
       .finally(() => setLoading(false));
   }, [selectedClient, fromDate, toDate, isClient]);
 
-  const formatCurrency = (v: number) => v.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0 });
+  const formatCurrency = (v: number) => {
+    const currency = data?.currency || 'USD';
+    try {
+      return v.toLocaleString('en-US', { style: 'currency', currency, minimumFractionDigits: 0 });
+    } catch {
+      return `${currency} ${v.toLocaleString()}`;
+    }
+  };
 
   if (loading && !data) {
     return (
