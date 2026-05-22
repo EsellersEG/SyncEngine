@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
-import { useAuth } from '../hooks/useAuth';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, LineChart, Line, Legend
@@ -57,7 +56,6 @@ function SectionDivider({ title }: { title: string }) {
 }
 
 export default function AnalyticsPage() {
-  const { isClient } = useAuth();
   const [data, setData] = useState<AnalyticsData | null>(null);
   const [clients, setClients] = useState<Client[]>([]);
   const [selectedClient, setSelectedClient] = useState('');
@@ -66,19 +64,17 @@ export default function AnalyticsPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!isClient) {
-      api.get('/clients').then((c: Client[]) => {
-        setClients(c);
-        if (c.length > 0 && !selectedClient) setSelectedClient(c[0].id);
-      }).catch(console.error);
-    }
-  }, [isClient]);
+    api.get('/clients').then((c: Client[]) => {
+      setClients(c);
+      if (c.length > 0 && !selectedClient) setSelectedClient(c[0].id);
+    }).catch(console.error);
+  }, []);
 
   useEffect(() => {
-    if (!isClient && !selectedClient) return;
+    if (!selectedClient) return;
     setLoading(true);
     const params = new URLSearchParams();
-    if (!isClient && selectedClient) params.set('client_id', selectedClient);
+    if (selectedClient) params.set('client_id', selectedClient);
     if (fromDate) params.set('from', fromDate);
     if (toDate) params.set('to', toDate);
 
@@ -86,7 +82,7 @@ export default function AnalyticsPage() {
       .then((d: AnalyticsData) => setData(d))
       .catch(console.error)
       .finally(() => setLoading(false));
-  }, [selectedClient, fromDate, toDate, isClient]);
+  }, [selectedClient, fromDate, toDate]);
 
   const formatCurrency = (v: number) => {
     const currency = data?.currency || 'USD';
@@ -117,14 +113,14 @@ export default function AnalyticsPage() {
 
       {/* Filters */}
       <div style={{ display: 'flex', gap: 12, marginBottom: 28, flexWrap: 'wrap', alignItems: 'center' }}>
-        {!isClient && (
+        {clients.length > 1 && (
           <select
             className="input"
             style={{ width: 220 }}
             value={selectedClient}
             onChange={e => setSelectedClient(e.target.value)}
           >
-            <option value="">Select Client</option>
+            <option value="">Select Store</option>
             {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
         )}

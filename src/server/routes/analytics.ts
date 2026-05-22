@@ -16,9 +16,14 @@ router.get('/', async (req: AuthRequest, res) => {
     // For client users, resolve their client_id
     let resolvedClientId = client_id as string | null;
     if (isClient) {
-      const ucResult = await query('SELECT client_id FROM user_clients WHERE user_id = $1 LIMIT 1', [req.user!.id]);
-      if (!ucResult.rows[0]) return res.status(403).json({ error: 'No client assigned' });
-      resolvedClientId = ucResult.rows[0].client_id;
+      const ucResult = await query('SELECT client_id FROM user_clients WHERE user_id = $1', [req.user!.id]);
+      if (ucResult.rows.length === 0) return res.status(403).json({ error: 'No client assigned' });
+      const allowedIds = ucResult.rows.map((r: { client_id: string }) => r.client_id);
+      if (resolvedClientId) {
+        if (!allowedIds.includes(resolvedClientId)) return res.status(403).json({ error: 'Access denied to this client' });
+      } else {
+        resolvedClientId = allowedIds[0];
+      }
     }
 
     if (!resolvedClientId) {
