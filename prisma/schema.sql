@@ -8,7 +8,8 @@ CREATE TABLE users (
   email VARCHAR(255) UNIQUE NOT NULL,
   password_hash TEXT NOT NULL,
   name VARCHAR(255) NOT NULL,
-  role VARCHAR(50) NOT NULL DEFAULT 'client', -- 'admin', 'client', 'viewer'
+  role VARCHAR(50) NOT NULL DEFAULT 'client', -- 'admin', 'employee', 'client', 'viewer'
+  permissions TEXT[] DEFAULT '{}', -- granular page access: 'dashboard','clients','feeds','channels','products','mapping','automations','sync','orders','analytics','tasks','invoices','tools'
   is_active BOOLEAN DEFAULT TRUE,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()

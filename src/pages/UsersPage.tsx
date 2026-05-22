@@ -7,8 +7,25 @@ interface User {
   id: string; name: string; email: string; role: string;
   is_active: boolean; created_at: string;
   client_count?: number;
+  permissions?: string[];
 }
 interface Client { id: string; name: string; slug: string; is_active: boolean; }
+
+const ALL_PERMISSIONS = [
+  { key: 'dashboard', label: 'Dashboard' },
+  { key: 'clients', label: 'Clients' },
+  { key: 'feeds', label: 'Feeds' },
+  { key: 'channels', label: 'Channels' },
+  { key: 'products', label: 'Products' },
+  { key: 'mapping', label: 'Attribute Mapping' },
+  { key: 'automations', label: 'Automations' },
+  { key: 'sync', label: 'Sync Jobs' },
+  { key: 'orders', label: 'Orders' },
+  { key: 'analytics', label: 'Analytics' },
+  { key: 'tasks', label: 'Tasks' },
+  { key: 'invoices', label: 'Invoices' },
+  { key: 'tools', label: 'Tools' },
+];
 
 function RoleBadge({ role }: { role: string }) {
   const map: Record<string, { badge: string; icon: React.ElementType }> = {
@@ -21,8 +38,8 @@ function RoleBadge({ role }: { role: string }) {
   return <span className={`badge ${badge}`}><Icon size={10} /> {role}</span>;
 }
 
-const emptyCreate = { name: '', email: '', password: '', role: 'client' };
-const emptyEdit = { name: '', role: 'client', is_active: true, password: '' };
+const emptyCreate = { name: '', email: '', password: '', role: 'client', permissions: [] as string[] };
+const emptyEdit = { name: '', role: 'client', is_active: true, password: '', permissions: [] as string[] };
 
 export default function UsersPage() {
   const { isAdmin } = useAuth();
@@ -62,7 +79,7 @@ export default function UsersPage() {
 
   async function openEdit(user: User) {
     setEditUser(user);
-    setEditForm({ name: user.name, role: user.role, is_active: user.is_active, password: '' });
+    setEditForm({ name: user.name, role: user.role, is_active: user.is_active, password: '', permissions: user.permissions || [] });
     setEditError('');
     try {
       const a = await api.get(`/users/${user.id}/assignments`) as { client_ids: string[] };
@@ -75,14 +92,14 @@ export default function UsersPage() {
     if (!editUser) return;
     setEditSaving(true); setEditError('');
     try {
-      const payload: Record<string, unknown> = { name: editForm.name, role: editForm.role, is_active: editForm.is_active };
+      const payload: Record<string, unknown> = { name: editForm.name, role: editForm.role, is_active: editForm.is_active, permissions: editForm.permissions };
       if (editForm.password.length >= 8) payload.password = editForm.password;
       const updated = await api.patch(`/users/${editUser.id}`, payload) as User;
       // Save client assignments only for non-admin users
       if (editForm.role !== 'admin') {
         await api.put(`/users/${editUser.id}/assignments`, { client_ids: assignedClients });
       }
-      setUsers(prev => prev.map(u => u.id === editUser.id ? { ...u, ...updated, client_count: editForm.role === 'admin' ? undefined : assignedClients.length } : u));
+      setUsers(prev => prev.map(u => u.id === editUser.id ? { ...u, ...updated, permissions: editForm.permissions, client_count: editForm.role === 'admin' ? undefined : assignedClients.length } : u));
       setEditUser(null);
     } catch (err) {
       setEditError(err instanceof Error ? err.message : 'Failed to save');
@@ -91,6 +108,25 @@ export default function UsersPage() {
 
   function toggleClient(id: string) {
     setAssignedClients(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  }
+
+  function togglePermission(key: string, form: 'create' | 'edit') {
+    if (form === 'create') {
+      setCreateForm(f => ({ ...f, permissions: f.permissions.includes(key) ? f.permissions.filter(p => p !== key) : [...f.permissions, key] }));
+    } else {
+      setEditForm(f => ({ ...f, permissions: f.permissions.includes(key) ? f.permissions.filter(p => p !== key) : [...f.permissions, key] }));
+    }
+  }
+
+  function selectAllPermissions(form: 'create' | 'edit') {
+    const allKeys = ALL_PERMISSIONS.map(p => p.key);
+    if (form === 'create') setCreateForm(f => ({ ...f, permissions: allKeys }));
+    else setEditForm(f => ({ ...f, permissions: allKeys }));
+  }
+
+  function clearAllPermissions(form: 'create' | 'edit') {
+    if (form === 'create') setCreateForm(f => ({ ...f, permissions: [] }));
+    else setEditForm(f => ({ ...f, permissions: [] }));
   }
 
   if (!isAdmin) return (
@@ -147,7 +183,7 @@ export default function UsersPage() {
                     <td style={{ fontSize: 12, color: '#64748b' }}>
                       {user.role === 'admin'
                         ? <span style={{ color: '#ffa500' }}>Full access</span>
-                        : <span>{user.client_count ?? 0} client{Number(user.client_count) !== 1 ? 's' : ''}</span>}
+                        : <span>{(user.permissions || []).length}/{ALL_PERMISSIONS.length} pages</span>}
                     </td>
                     <td>
                       <span className={`badge ${user.is_active ? 'badge-success' : 'badge-muted'}`}>
@@ -199,6 +235,26 @@ export default function UsersPage() {
                   <option value="viewer">Viewer — Read-only on assigned items</option>
                 </select>
               </div>
+              {/* Permissions — only for non-admin */}
+              {createForm.role !== 'admin' && (
+                <div className="form-group">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                    <label className="label" style={{ margin: 0 }}>Page Permissions</label>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button type="button" style={{ fontSize: 11, color: '#ffa500', background: 'none', border: 'none', cursor: 'pointer' }} onClick={() => selectAllPermissions('create')}>Select All</button>
+                      <button type="button" style={{ fontSize: 11, color: '#64748b', background: 'none', border: 'none', cursor: 'pointer' }} onClick={() => clearAllPermissions('create')}>Clear</button>
+                    </div>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                    {ALL_PERMISSIONS.map(p => (
+                      <label key={p.key} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: createForm.permissions.includes(p.key) ? 'rgba(255,165,0,0.1)' : 'rgba(255,255,255,0.02)', borderRadius: 8, border: `1px solid ${createForm.permissions.includes(p.key) ? 'rgba(255,165,0,0.3)' : 'rgba(255,255,255,0.05)'}`, cursor: 'pointer', fontSize: 13 }}>
+                        <input type="checkbox" checked={createForm.permissions.includes(p.key)} onChange={() => togglePermission(p.key, 'create')} style={{ accentColor: '#ffa500' }} />
+                        <span style={{ color: '#e2e8f0' }}>{p.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
               {createError && <div style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: '#f87171' }}>{createError}</div>}
               <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
                 <button type="button" className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setShowCreate(false)}>Cancel</button>
@@ -270,6 +326,28 @@ export default function UsersPage() {
                       ))}
                     </div>
                   )}
+                </div>
+              )}
+
+              {/* Page Permissions — only for non-admin */}
+              {editForm.role !== 'admin' && (
+                <div style={{ borderTop: '1px solid rgba(255,255,255,0.07)', paddingTop: 16 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: '#94a3b8' }}>Page Permissions</div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button type="button" style={{ fontSize: 11, color: '#ffa500', background: 'none', border: 'none', cursor: 'pointer' }} onClick={() => selectAllPermissions('edit')}>Select All</button>
+                      <button type="button" style={{ fontSize: 11, color: '#64748b', background: 'none', border: 'none', cursor: 'pointer' }} onClick={() => clearAllPermissions('edit')}>Clear</button>
+                    </div>
+                  </div>
+                  <p style={{ fontSize: 12, color: '#64748b', marginBottom: 10 }}>Choose which pages this user can see in the navigation.</p>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                    {ALL_PERMISSIONS.map(p => (
+                      <label key={p.key} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: editForm.permissions.includes(p.key) ? 'rgba(255,165,0,0.1)' : 'rgba(255,255,255,0.02)', borderRadius: 8, border: `1px solid ${editForm.permissions.includes(p.key) ? 'rgba(255,165,0,0.3)' : 'rgba(255,255,255,0.05)'}`, cursor: 'pointer', fontSize: 13 }}>
+                        <input type="checkbox" checked={editForm.permissions.includes(p.key)} onChange={() => togglePermission(p.key, 'edit')} style={{ accentColor: '#ffa500' }} />
+                        <span style={{ color: '#e2e8f0' }}>{p.label}</span>
+                      </label>
+                    ))}
+                  </div>
                 </div>
               )}
 

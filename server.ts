@@ -95,6 +95,11 @@ app.listen(PORT, async () => {
   console.log(`🚀 Sync-Engine server running on port ${PORT}`);
   console.log(`   Environment: ${process.env.NODE_ENV || 'development'}`);
 
+  // Auto-migrate: add permissions column if not exists
+  try {
+    await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS permissions TEXT[] DEFAULT '{}'`);
+  } catch (e) { console.log('[Migration] permissions column:', (e as Error).message); }
+
   // Clean up orphaned running/pending jobs from previous deploys/crashes
   try {
     const cleaned = await query(

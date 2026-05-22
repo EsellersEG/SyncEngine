@@ -11,18 +11,18 @@ const toolItems = [
 ];
 
 const navItems = [
-  { to: '/', icon: LayoutDashboard, label: 'Dashboard', end: true, roles: ['admin', 'employee', 'client'] },
-  { to: '/clients', icon: Users, label: 'Clients', roles: ['admin', 'employee'] },
-  { to: '/feeds', icon: Database, label: 'Feeds', roles: ['admin', 'employee', 'client'] },
-  { to: '/channels', icon: GitBranch, label: 'Channels', roles: ['admin', 'employee', 'client'] },
-  { to: '/products', icon: Package, label: 'Products', roles: ['admin', 'employee', 'client'] },
-  { to: '/mapping', icon: Map, label: 'Attribute Mapping', roles: ['admin', 'employee'] },
-  { to: '/automations', icon: Activity, label: 'Automations', roles: ['admin', 'employee', 'client'] },
-  { to: '/sync', icon: Zap, label: 'Sync Jobs', roles: ['admin', 'employee', 'client'] },
-  { to: '/orders', icon: ShoppingBag, label: 'Orders', roles: ['admin', 'employee', 'client'] },
-  { to: '/analytics', icon: TrendingUp, label: 'Analytics', roles: ['admin', 'employee', 'client'] },
-  { to: '/tasks', icon: ClipboardList, label: 'Tasks', roles: ['admin', 'employee'] },
-  { to: '/invoices', icon: FileText, label: 'Invoices', roles: ['admin', 'employee', 'client'] },
+  { to: '/', icon: LayoutDashboard, label: 'Dashboard', end: true, roles: ['admin', 'employee', 'client'], permission: 'dashboard' },
+  { to: '/clients', icon: Users, label: 'Clients', roles: ['admin', 'employee'], permission: 'clients' },
+  { to: '/feeds', icon: Database, label: 'Feeds', roles: ['admin', 'employee', 'client'], permission: 'feeds' },
+  { to: '/channels', icon: GitBranch, label: 'Channels', roles: ['admin', 'employee', 'client'], permission: 'channels' },
+  { to: '/products', icon: Package, label: 'Products', roles: ['admin', 'employee', 'client'], permission: 'products' },
+  { to: '/mapping', icon: Map, label: 'Attribute Mapping', roles: ['admin', 'employee'], permission: 'mapping' },
+  { to: '/automations', icon: Activity, label: 'Automations', roles: ['admin', 'employee', 'client'], permission: 'automations' },
+  { to: '/sync', icon: Zap, label: 'Sync Jobs', roles: ['admin', 'employee', 'client'], permission: 'sync' },
+  { to: '/orders', icon: ShoppingBag, label: 'Orders', roles: ['admin', 'employee', 'client'], permission: 'orders' },
+  { to: '/analytics', icon: TrendingUp, label: 'Analytics', roles: ['admin', 'employee', 'client'], permission: 'analytics' },
+  { to: '/tasks', icon: ClipboardList, label: 'Tasks', roles: ['admin', 'employee'], permission: 'tasks' },
+  { to: '/invoices', icon: FileText, label: 'Invoices', roles: ['admin', 'employee', 'client'], permission: 'invoices' },
 ];
 
 const adminItems = [
@@ -30,7 +30,7 @@ const adminItems = [
 ];
 
 export default function Layout() {
-  const { user, logout, isAdmin } = useAuth();
+  const { user, logout, isAdmin, hasPermission } = useAuth();
   const navigate = useNavigate();
 
   function handleLogout() {
@@ -69,7 +69,11 @@ export default function Layout() {
           <div style={{ fontSize: 11, fontWeight: 600, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.08em', padding: '0 8px', marginBottom: 8 }}>
             Navigation
           </div>
-          {navItems.filter(item => !item.roles || item.roles.includes(user?.role || '')).map(item => (
+          {navItems.filter(item => {
+            if (!item.roles || !item.roles.includes(user?.role || '')) return false;
+            if (item.permission && !hasPermission(item.permission)) return false;
+            return true;
+          }).map(item => (
             <NavLink
               key={item.to}
               to={item.to}

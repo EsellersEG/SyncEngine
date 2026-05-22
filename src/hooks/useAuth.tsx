@@ -6,6 +6,7 @@ interface User {
   email: string;
   name: string;
   role: string;
+  permissions: string[];
 }
 
 interface AuthContextType {
@@ -16,6 +17,7 @@ interface AuthContextType {
   isAdmin: boolean;
   isEmployee: boolean;
   isClient: boolean;
+  hasPermission: (key: string) => boolean;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -56,12 +58,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUserState(null);
   };
 
+  const hasPermission = (key: string): boolean => {
+    if (!user) return false;
+    if (user.role === 'admin') return true;
+    return (user.permissions || []).includes(key);
+  };
+
   return (
     <AuthContext.Provider value={{
       user, loading, login, logout,
       isAdmin: user?.role === 'admin',
       isEmployee: user?.role === 'employee',
       isClient: user?.role === 'client',
+      hasPermission,
     }}>
       {children}
     </AuthContext.Provider>

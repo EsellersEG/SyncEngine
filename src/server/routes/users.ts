@@ -23,7 +23,7 @@ router.get('/brief', requireAdminOrEmployee, async (_req, res) => {
 router.get('/', requireAdmin, async (_req, res) => {
   try {
     const result = await query(
-      `SELECT u.id, u.email, u.name, u.role, u.is_active, u.created_at,
+      `SELECT u.id, u.email, u.name, u.role, u.is_active, u.permissions, u.created_at,
               COUNT(DISTINCT uc.client_id) AS client_count
        FROM users u
        LEFT JOIN user_clients uc ON uc.user_id = u.id
@@ -53,16 +53,16 @@ router.get('/:id/assignments', requireAdmin, async (req, res) => {
 // POST /api/users — admin creates users
 router.post('/', requireAdmin, async (req: AuthRequest, res) => {
   try {
-    const { email, password, name, role = 'client' } = req.body;
+    const { email, password, name, role = 'client', permissions = [] } = req.body;
     if (!email || !password || !name) {
       return res.status(400).json({ error: 'email, password, name required' });
     }
     const hash = await bcrypt.hash(password, 12);
     const result = await query(
-      `INSERT INTO users (email, password_hash, name, role)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, email, name, role, is_active, created_at`,
-      [email.toLowerCase(), hash, name, role]
+      `INSERT INTO users (email, password_hash, name, role, permissions)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, email, name, role, permissions, is_active, created_at`,
+      [email.toLowerCase(), hash, name, role, permissions]
     );
     return res.status(201).json(result.rows[0]);
   } catch (err: unknown) {
@@ -77,24 +77,31 @@ router.post('/', requireAdmin, async (req: AuthRequest, res) => {
 // PATCH /api/users/:id — update user (name, role, is_active, optional new password)
 router.patch('/:id', requireAdmin, async (req, res) => {
   try {
-    const { name, role, is_active, password } = req.body;
+    const { name, role, is_active, password, permissions } = req.body;
     let passwordClause = '';
+    let permissionsClause = '';
     const params: unknown[] = [name, role, is_active];
+    let paramIdx = 4;
     if (password && String(password).length >= 8) {
       const hash = await bcrypt.hash(password, 12);
-      passwordClause = ', password_hash = $4';
-      params.push(hash, req.params.id);
-    } else {
-      params.push(req.params.id);
+      passwordClause = `, password_hash = $${paramIdx}`;
+      params.push(hash);
+      paramIdx++;
     }
+    if (permissions !== undefined) {
+      permissionsClause = `, permissions = $${paramIdx}`;
+      params.push(permissions);
+      paramIdx++;
+    }
+    params.push(req.params.id);
     const result = await query(
       `UPDATE users SET
         name = COALESCE($1, name),
         role = COALESCE($2, role),
-        is_active = COALESCE($3, is_active)${passwordClause},
+        is_active = COALESCE($3, is_active)${passwordClause}${permissionsClause},
         updated_at = NOW()
        WHERE id = $${params.length}
-       RETURNING id, email, name, role, is_active`,
+       RETURNING id, email, name, role, permissions, is_active`,
       params
     );
     if (!result.rows[0]) return res.status(404).json({ error: 'User not found' });

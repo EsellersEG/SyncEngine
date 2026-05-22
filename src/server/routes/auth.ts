@@ -14,7 +14,7 @@ router.post('/login', async (req, res) => {
     }
 
     const result = await query(
-      'SELECT id, email, name, role, password_hash, is_active FROM users WHERE email = $1',
+      'SELECT id, email, name, role, password_hash, is_active, permissions FROM users WHERE email = $1',
       [email.toLowerCase()]
     );
 
@@ -28,15 +28,16 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
+    const permissions = user.permissions || [];
     const token = jwt.sign(
-      { id: user.id, email: user.email, role: user.role, name: user.name },
+      { id: user.id, email: user.email, role: user.role, name: user.name, permissions },
       process.env.JWT_SECRET!,
       { expiresIn: '7d' }
     );
 
     return res.json({
       token,
-      user: { id: user.id, email: user.email, name: user.name, role: user.role },
+      user: { id: user.id, email: user.email, name: user.name, role: user.role, permissions },
     });
   } catch (err) {
     console.error('Login error:', err);
@@ -99,7 +100,7 @@ router.get('/me', async (req, res) => {
     const token = authHeader.split(' ')[1];
     const decoded = jwt.verify(token, process.env.JWT_SECRET!) as { id: string };
     const result = await query(
-      'SELECT id, email, name, role, is_active, created_at FROM users WHERE id = $1',
+      'SELECT id, email, name, role, is_active, permissions, created_at FROM users WHERE id = $1',
       [decoded.id]
     );
     if (!result.rows[0]) return res.status(404).json({ error: 'User not found' });
