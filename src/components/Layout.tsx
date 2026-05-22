@@ -3,7 +3,7 @@ import { useAuth } from '../hooks/useAuth';
 import {
   LayoutDashboard, Users, Database, Zap, Settings,
   GitBranch, ShoppingBag, Map, Package, LogOut, Activity, FileText, ClipboardList,
-  Wrench, Sparkles
+  Wrench, Sparkles, TrendingUp
 } from 'lucide-react';
 
 const toolItems = [
@@ -20,6 +20,7 @@ const navItems = [
   { to: '/automations', icon: Activity, label: 'Automations', roles: ['admin', 'employee', 'client'] },
   { to: '/sync', icon: Zap, label: 'Sync Jobs', roles: ['admin', 'employee', 'client'] },
   { to: '/orders', icon: ShoppingBag, label: 'Orders', roles: ['admin', 'employee', 'client'] },
+  { to: '/analytics', icon: TrendingUp, label: 'Analytics', roles: ['admin', 'employee', 'client'] },
   { to: '/tasks', icon: ClipboardList, label: 'Tasks', roles: ['admin', 'employee'] },
   { to: '/invoices', icon: FileText, label: 'Invoices', roles: ['admin', 'employee', 'client'] },
 ];

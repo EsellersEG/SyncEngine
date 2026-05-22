@@ -16,6 +16,7 @@ import OrdersPage from './pages/OrdersPage';
 import AutomationsPage from './pages/AutomationsPage';
 import InvoicesPage from './pages/InvoicesPage';
 import TasksPage from './pages/TasksPage';
+import AnalyticsPage from './pages/AnalyticsPage';
 import MarketplaceContentPage from './pages/tools/marketplace/MarketplaceContentPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -52,6 +53,7 @@ function AppRoutes() {
         <Route path="automations" element={<AutomationsPage />} />
         <Route path="products" element={<ProductsPage />} />
         <Route path="orders" element={<OrdersPage />} />
+        <Route path="analytics" element={<AnalyticsPage />} />
         <Route path="tasks" element={<TasksPage />} />
         <Route path="invoices" element={<InvoicesPage />} />
         <Route path="users" element={<UsersPage />} />

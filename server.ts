@@ -21,6 +21,7 @@ import taskRoutes from './src/server/routes/tasks.js';
 import noonRoutes from './src/server/routes/noon.js';
 import amazonRoutes from './src/server/routes/amazon.js';
 import toolsRoutes from './src/server/routes/tools.js';
+import analyticsRoutes from './src/server/routes/analytics.js';
 import { startScheduler } from './src/server/services/scheduler.js';
 import { query } from './src/server/db.js';
 import { blockClientWrites, type AuthRequest } from './src/server/middleware/auth.js';
@@ -64,6 +65,7 @@ app.use('/api/tasks', taskRoutes);
 app.use('/api/noon', noonRoutes);
 app.use('/api/amazon', amazonRoutes);
 app.use('/api/tools', toolsRoutes);
+app.use('/api/analytics', analyticsRoutes);
 app.use('/webhooks', webhookRoutes);
 
 // ── Health Check ───────────────────────────────────────────────────────────
