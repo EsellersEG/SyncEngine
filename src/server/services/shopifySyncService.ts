@@ -1028,7 +1028,7 @@ async function syncProductTurbo(
       console.warn(`[SyncFlow] No locationId for stock update of ${product.sku}`);
     }
 
-    // 5. Image sync (when withImages=true) — keep old media until replacement is attached
+    // 5. Image sync (when withImages=true) — replace or delete media
     if (withImages) {
       const imageSource = mapped.variant_image || mapped.image_url;
       if (imageSource) {
@@ -1040,7 +1040,21 @@ async function syncProductTurbo(
               await replaceProductMedia(channel, shopifyIds.productId, resolvedUrls);
             })
           );
+        } else {
+          // Image field exists but has no valid URLs — delete all existing media
+          promises.push(
+            getProductMediaIds(channel, shopifyIds.productId).then(async (mediaIds) => {
+              if (mediaIds.length > 0) await deleteProductMedia(channel, shopifyIds.productId, mediaIds);
+            })
+          );
         }
+      } else {
+        // Image field is empty/null — delete all existing media
+        promises.push(
+          getProductMediaIds(channel, shopifyIds.productId).then(async (mediaIds) => {
+            if (mediaIds.length > 0) await deleteProductMedia(channel, shopifyIds.productId, mediaIds);
+          })
+        );
       }
     }
 
@@ -1408,13 +1422,36 @@ async function syncGroupedProduct(
         }
 
         const updateImageSource = mapped.variant_image || mapped.image_url;
-        if (withImages && updateImageSource) {
-          const rawUrls = String(updateImageSource).split(',').map(u => u.trim()).filter(isValidImageUrl);
-          if (rawUrls.length > 0) {
-            const resolvedUrls = await resolveImageUrls(channel, rawUrls);
-            if (resolvedUrls.length > 0) {
-              updatePromises.push(replaceProductMedia(channel, shopifyIds.productId, resolvedUrls));
+        if (withImages) {
+          if (updateImageSource) {
+            const rawUrls = String(updateImageSource).split(',').map(u => u.trim()).filter(isValidImageUrl);
+            if (rawUrls.length > 0) {
+              const resolvedUrls = await resolveImageUrls(channel, rawUrls);
+              if (resolvedUrls.length > 0) {
+                updatePromises.push(replaceProductMedia(channel, shopifyIds.productId, resolvedUrls));
+              } else {
+                // No valid resolved URLs — delete existing media
+                updatePromises.push(
+                  getProductMediaIds(channel, shopifyIds.productId).then(async (mediaIds) => {
+                    if (mediaIds.length > 0) await deleteProductMedia(channel, shopifyIds.productId, mediaIds);
+                  })
+                );
+              }
+            } else {
+              // Image field has no valid URLs — delete existing media
+              updatePromises.push(
+                getProductMediaIds(channel, shopifyIds.productId).then(async (mediaIds) => {
+                  if (mediaIds.length > 0) await deleteProductMedia(channel, shopifyIds.productId, mediaIds);
+                })
+              );
             }
+          } else {
+            // No image source at all — delete existing media
+            updatePromises.push(
+              getProductMediaIds(channel, shopifyIds.productId).then(async (mediaIds) => {
+                if (mediaIds.length > 0) await deleteProductMedia(channel, shopifyIds.productId, mediaIds);
+              })
+            );
           }
         }
 
@@ -1828,7 +1865,7 @@ async function syncVariantGroup(
   if (metafields.length > 0) input.metafields = metafields;
   if (fileMap.size > 0) input.files = Array.from(fileMap.values());
 
-  const existingMediaIdsToDelete = existingProductId && withImages && fileMap.size > 0
+  const existingMediaIdsToDelete = existingProductId && withImages
     ? await getProductMediaIds(channel, existingProductId)
     : [];
 
