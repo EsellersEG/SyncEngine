@@ -1776,28 +1776,24 @@ async function syncVariantGroup(
     throw new Error(`Variant group ${group.handle} has no valid option names/values`);
   }
 
+  // Resolve all image URLs in ONE pass to avoid double staged-uploads producing different resourceUrls
   const fileMap = new Map<string, { originalSource: string; contentType: string }>();
-  if (withImages) {
-    for (const entry of mappedRows) {
-      const rawUrls = String(entry.mapped.image_url || '').split(',').map(url => url.trim()).filter(isValidImageUrl);
-      const resolvedUrls = await resolveImageUrls(channel, rawUrls);
-      for (const url of resolvedUrls) {
-        if (!fileMap.has(url)) fileMap.set(url, { originalSource: url, contentType: 'IMAGE' });
-      }
-    }
-  }
-
-  const metafields = buildMetafields(first.row.raw_data, metafieldMappings, shopifyDefs);
-
-  // Pre-resolve variant images (needs await, can't do inside sync .map)
   const variantResolvedImages: (string | null)[] = [];
   if (withImages) {
     for (const entry of mappedRows) {
       const variantImageSource = entry.mapped.variant_image || entry.mapped.image_url;
       if (variantImageSource) {
         const rawVarUrls = String(variantImageSource).split(',').map(url => url.trim()).filter(isValidImageUrl);
-        const resolvedVarUrls = await resolveImageUrls(channel, rawVarUrls);
-        variantResolvedImages.push(resolvedVarUrls[0] || null);
+        if (rawVarUrls.length > 0) {
+          const resolvedVarUrls = await resolveImageUrls(channel, rawVarUrls);
+          variantResolvedImages.push(resolvedVarUrls[0] || null);
+          // Add all resolved URLs to fileMap so they're included in input.files
+          for (const url of resolvedVarUrls) {
+            if (!fileMap.has(url)) fileMap.set(url, { originalSource: url, contentType: 'IMAGE' });
+          }
+        } else {
+          variantResolvedImages.push(null);
+        }
       } else {
         variantResolvedImages.push(null);
       }
@@ -1805,6 +1801,8 @@ async function syncVariantGroup(
   } else {
     mappedRows.forEach(() => variantResolvedImages.push(null));
   }
+
+  const metafields = buildMetafields(first.row.raw_data, metafieldMappings, shopifyDefs);
 
   const input: Record<string, unknown> = {
     title: first.mapped.title || first.row.sku,
