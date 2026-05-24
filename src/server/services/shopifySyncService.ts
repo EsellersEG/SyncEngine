@@ -1760,7 +1760,10 @@ async function syncVariantGroup(
   shopifyDefs: Map<string, string> = new Map(),
 ) {
   const mappedRows = group.rows.map(row => ({ row, mapped: applyPriceAdjustment(applyMappings(row.raw_data, mappings), priceAdjustmentPercent, priceRoundingMode) }));
-  const first = mappedRows[0];
+  // The "parent" row is the one with the title (first row in the sheet group).
+  // It holds product-level fields: title, description, vendor, tags, images, etc.
+  const parentRow = mappedRows.find(entry => entry.mapped.title && String(entry.mapped.title).trim() !== '') || mappedRows[0];
+  const first = parentRow;
   const productIds = group.rows
     .map(row => shopifyMap.get(row.sku)?.productId)
     .filter((value): value is string => Boolean(value));
@@ -2892,14 +2895,14 @@ export async function runSyncJob(config: SyncJobConfig) {
     if (skus && skus.length > 0) {
       // Only fetch specific SKUs (auto-sync for changed products)
       const productsResult = await query(
-        'SELECT sku, raw_data FROM products WHERE feed_id = $1 AND status = $2 AND sku = ANY($3)',
+        'SELECT sku, raw_data FROM products WHERE feed_id = $1 AND status = $2 AND sku = ANY($3) ORDER BY id',
         [feedId, 'active', skus]
       );
       products = productsResult.rows;
       sourceCount = products.length;
     } else {
       const productsResult = await query(
-        'SELECT sku, raw_data FROM products WHERE feed_id = $1 AND status = $2',
+        'SELECT sku, raw_data FROM products WHERE feed_id = $1 AND status = $2 ORDER BY id',
         [feedId, 'active']
       );
       products = productsResult.rows;
