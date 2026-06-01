@@ -59,7 +59,8 @@ router.post('/', async (req, res) => {
       client_id, name, type,
       shopify_store_url, shopify_access_token, shopify_api_version,
       noon_credentials_json, noon_warehouse_code, noon_country_code,
-      amazon_credentials_json, amazon_marketplace_ids, amazon_region,
+      amazon_credentials_json, amazon_app_id, amazon_seller_id, amazon_refresh_token,
+      amazon_marketplace_ids, amazon_region,
       settings = {}
     } = req.body;
 
@@ -71,8 +72,21 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'noon_credentials_json required for Noon channels' });
     }
 
-    if (type === 'amazon' && !amazon_credentials_json) {
-      return res.status(400).json({ error: 'amazon_credentials_json required for Amazon channels' });
+    // Build Amazon credentials from app + seller_id (or accept raw JSON for backward compat)
+    let finalAmazonCredentials = amazon_credentials_json || null;
+    if (type === 'amazon' && !finalAmazonCredentials && amazon_app_id && amazon_seller_id) {
+      const appResult = await query('SELECT client_id, client_secret FROM amazon_apps WHERE id = $1', [amazon_app_id]);
+      const app = appResult.rows[0];
+      if (!app) return res.status(400).json({ error: 'Amazon app not found' });
+      finalAmazonCredentials = JSON.stringify({
+        client_id: app.client_id,
+        client_secret: app.client_secret,
+        refresh_token: amazon_refresh_token || '',
+        seller_id: amazon_seller_id,
+      });
+    }
+    if (type === 'amazon' && !finalAmazonCredentials) {
+      return res.status(400).json({ error: 'Amazon app and seller_id required for Amazon channels' });
     }
 
     const result = await query(
@@ -82,7 +96,7 @@ router.post('/', async (req, res) => {
       [client_id, name, type, shopify_store_url || null, shopify_access_token || null,
        shopify_api_version || '2024-10', noon_credentials_json || null,
        noon_warehouse_code || null, noon_country_code || null,
-       amazon_credentials_json || null, amazon_marketplace_ids || null, amazon_region || null,
+       finalAmazonCredentials, amazon_marketplace_ids || null, amazon_region || null,
        JSON.stringify(settings)]
     );
     return res.status(201).json(result.rows[0]);
@@ -95,7 +109,22 @@ router.post('/', async (req, res) => {
 // PATCH /api/channels/:id
 router.patch('/:id', async (req, res) => {
   try {
-    const { name, status, shopify_access_token, shopify_api_version, noon_credentials_json, noon_warehouse_code, noon_country_code, amazon_credentials_json, amazon_marketplace_ids, amazon_region, settings } = req.body;
+    const { name, status, shopify_access_token, shopify_api_version, noon_credentials_json, noon_warehouse_code, noon_country_code, amazon_credentials_json, amazon_app_id, amazon_seller_id, amazon_refresh_token, amazon_marketplace_ids, amazon_region, settings } = req.body;
+
+    // Build Amazon credentials from app if provided
+    let finalAmazonCredentials = amazon_credentials_json || null;
+    if (amazon_app_id && amazon_seller_id) {
+      const appResult = await query('SELECT client_id, client_secret FROM amazon_apps WHERE id = $1', [amazon_app_id]);
+      const app = appResult.rows[0];
+      if (app) {
+        finalAmazonCredentials = JSON.stringify({
+          client_id: app.client_id,
+          client_secret: app.client_secret,
+          refresh_token: amazon_refresh_token || '',
+          seller_id: amazon_seller_id,
+        });
+      }
+    }
     const result = await query(
       `UPDATE channels SET
         name = COALESCE($1, name),
@@ -115,7 +144,7 @@ router.patch('/:id', async (req, res) => {
       [name, status, shopify_access_token, shopify_api_version,
        settings ? JSON.stringify(settings) : null,
        noon_credentials_json || null, noon_warehouse_code || null, noon_country_code || null,
-       amazon_credentials_json || null, amazon_marketplace_ids || null, amazon_region || null,
+       finalAmazonCredentials || null, amazon_marketplace_ids || null, amazon_region || null,
        req.params.id]
     );
     if (!result.rows[0]) return res.status(404).json({ error: 'Channel not found' });

@@ -40,17 +40,18 @@ export default function ChannelsPage() {
     client_id: '', name: '', type: 'shopify',
     shopify_store_url: '', shopify_access_token: '', shopify_api_version: '2024-10', webhook_secret: '',
     noon_credentials_json: '', noon_warehouse_code: '', noon_country_code: 'AE',
-    amazon_credentials_json: '', amazon_region: 'eu', amazon_marketplace_ids: '' as string,
+    amazon_app_id: '', amazon_seller_id: '', amazon_refresh_token: '', amazon_region: 'eu', amazon_marketplace_ids: '' as string,
   });
   const [error, setError] = useState('');
   const [editChannel, setEditChannel] = useState<Channel | null>(null);
-  const [editForm, setEditForm] = useState({ name: '', shopify_access_token: '', shopify_api_version: '2024-10', stock_location_id: '', webhook_secret: '', noon_credentials_json: '', noon_warehouse_code: '', noon_country_code: 'AE', amazon_credentials_json: '', amazon_region: 'eu', amazon_marketplace_ids: '' });
+  const [editForm, setEditForm] = useState({ name: '', shopify_access_token: '', shopify_api_version: '2024-10', stock_location_id: '', webhook_secret: '', noon_credentials_json: '', noon_warehouse_code: '', noon_country_code: 'AE', amazon_app_id: '', amazon_seller_id: '', amazon_refresh_token: '', amazon_region: 'eu', amazon_marketplace_ids: '' });
   const [locations, setLocations] = useState<Location[]>([]);
   const [loadingLocations, setLoadingLocations] = useState(false);
+  const [amazonApps, setAmazonApps] = useState<{ id: string; name: string; app_id: string }[]>([]);
 
   useEffect(() => {
-    Promise.all([api.get('/channels'), api.get('/clients')])
-      .then(([ch, cl]) => { setChannels(ch as Channel[]); setClients(cl as Client[]); })
+    Promise.all([api.get('/channels'), api.get('/clients'), api.get('/amazon/apps').catch(() => [])])
+      .then(([ch, cl, apps]) => { setChannels(ch as Channel[]); setClients(cl as Client[]); setAmazonApps(apps as { id: string; name: string; app_id: string }[]); })
       .finally(() => setLoading(false));
   }, []);
 
@@ -68,7 +69,9 @@ export default function ChannelsPage() {
         noon_credentials_json: form.noon_credentials_json || undefined,
         noon_warehouse_code: form.noon_warehouse_code || undefined,
         noon_country_code: form.noon_country_code || undefined,
-        amazon_credentials_json: form.amazon_credentials_json || undefined,
+        amazon_app_id: form.amazon_app_id || undefined,
+        amazon_seller_id: form.amazon_seller_id || undefined,
+        amazon_refresh_token: form.amazon_refresh_token || undefined,
         amazon_marketplace_ids: form.amazon_marketplace_ids || undefined,
         amazon_region: form.amazon_region || undefined,
         settings: { webhook_secret: form.webhook_secret || null },
@@ -117,7 +120,9 @@ export default function ChannelsPage() {
       noon_credentials_json: '',
       noon_warehouse_code: ch.noon_warehouse_code || '',
       noon_country_code: ch.noon_country_code || 'AE',
-      amazon_credentials_json: '',
+      amazon_app_id: '',
+      amazon_seller_id: '',
+      amazon_refresh_token: '',
       amazon_region: ch.amazon_region || 'eu',
       amazon_marketplace_ids: ch.amazon_marketplace_ids || '',
     });
@@ -142,7 +147,11 @@ export default function ChannelsPage() {
       if (editForm.noon_credentials_json) body.noon_credentials_json = editForm.noon_credentials_json;
       if (editForm.noon_warehouse_code) body.noon_warehouse_code = editForm.noon_warehouse_code;
       if (editForm.noon_country_code) body.noon_country_code = editForm.noon_country_code;
-      if (editForm.amazon_credentials_json) body.amazon_credentials_json = editForm.amazon_credentials_json;
+      if (editForm.amazon_app_id && editForm.amazon_seller_id) {
+        body.amazon_app_id = editForm.amazon_app_id;
+        body.amazon_seller_id = editForm.amazon_seller_id;
+        if (editForm.amazon_refresh_token) body.amazon_refresh_token = editForm.amazon_refresh_token;
+      }
       if (editForm.amazon_marketplace_ids) body.amazon_marketplace_ids = editForm.amazon_marketplace_ids;
       if (editForm.amazon_region) body.amazon_region = editForm.amazon_region;
       body.settings = { stock_location_id: editForm.stock_location_id || null, webhook_secret: editForm.webhook_secret || null };
@@ -167,7 +176,7 @@ export default function ChannelsPage() {
               client_id: '', name: '', type: 'shopify',
               shopify_store_url: '', shopify_access_token: '', shopify_api_version: '2024-10', webhook_secret: '',
               noon_credentials_json: '', noon_warehouse_code: '', noon_country_code: 'AE',
-              amazon_credentials_json: '', amazon_region: 'eu', amazon_marketplace_ids: '',
+              amazon_app_id: '', amazon_seller_id: '', amazon_refresh_token: '', amazon_region: 'eu', amazon_marketplace_ids: '',
             });
             setError('');
             setShowModal(true);
@@ -193,7 +202,7 @@ export default function ChannelsPage() {
                   client_id: '', name: '', type: 'shopify',
                   shopify_store_url: '', shopify_access_token: '', shopify_api_version: '2024-10', webhook_secret: '',
                   noon_credentials_json: '', noon_warehouse_code: '', noon_country_code: 'AE',
-                  amazon_credentials_json: '', amazon_region: 'eu', amazon_marketplace_ids: '',
+                  amazon_app_id: '', amazon_seller_id: '', amazon_refresh_token: '', amazon_region: 'eu', amazon_marketplace_ids: '',
                 });
                 setError('');
                 setShowModal(true);
@@ -353,9 +362,21 @@ export default function ChannelsPage() {
                 <div style={{ border: '1px solid rgba(255,153,0,0.2)', borderRadius: 10, padding: 14, background: 'rgba(13,18,36,0.4)' }}>
                   <div style={{ fontSize: 13, fontWeight: 700, color: '#e2e8f0', marginBottom: 10 }}>Amazon Settings</div>
                   <div className="form-group" style={{ marginBottom: 10 }}>
-                    <label className="label">Credentials JSON (leave blank to keep current)</label>
-                    <textarea className="input" rows={3} placeholder="Paste new credentials to update..." value={editForm.amazon_credentials_json}
-                      onChange={e => setEditForm(f => ({ ...f, amazon_credentials_json: e.target.value }))} style={{ fontFamily: 'monospace', fontSize: 12 }} />
+                    <label className="label">Amazon App</label>
+                    <select className="input" value={editForm.amazon_app_id} onChange={e => setEditForm(f => ({ ...f, amazon_app_id: e.target.value }))}>
+                      <option value="">Keep current app...</option>
+                      {amazonApps.map(app => <option key={app.id} value={app.id}>{app.name}</option>)}
+                    </select>
+                  </div>
+                  <div className="form-group" style={{ marginBottom: 10 }}>
+                    <label className="label">Seller ID</label>
+                    <input className="input" placeholder="Leave blank to keep current" value={editForm.amazon_seller_id}
+                      onChange={e => setEditForm(f => ({ ...f, amazon_seller_id: e.target.value }))} style={{ fontFamily: 'monospace', fontSize: 12 }} />
+                  </div>
+                  <div className="form-group" style={{ marginBottom: 10 }}>
+                    <label className="label">Refresh Token (leave blank to keep current)</label>
+                    <input className="input" type="password" placeholder="Atzr|..." value={editForm.amazon_refresh_token}
+                      onChange={e => setEditForm(f => ({ ...f, amazon_refresh_token: e.target.value }))} style={{ fontFamily: 'monospace', fontSize: 12 }} />
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                     <div className="form-group" style={{ marginBottom: 0 }}>
@@ -467,10 +488,26 @@ export default function ChannelsPage() {
               {form.type === 'amazon' && (
                 <>
                   <div className="form-group">
-                    <label className="label">Credentials JSON</label>
-                    <textarea className="input" rows={5} placeholder={'{\n  "client_id": "amzn1.application-oa2-client...",\n  "client_secret": "...",\n  "refresh_token": "Atzr|...",\n  "seller_id": "A1B2C3D4E5..."\n}'} value={form.amazon_credentials_json}
-                      onChange={e => setForm(f => ({ ...f, amazon_credentials_json: e.target.value }))} style={{ fontFamily: 'monospace', fontSize: 12 }} />
-                    <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>Paste your Amazon SP-API credentials as JSON</div>
+                    <label className="label">Amazon App</label>
+                    <select className="input" value={form.amazon_app_id} onChange={e => setForm(f => ({ ...f, amazon_app_id: e.target.value }))} required>
+                      <option value="">Select app...</option>
+                      {amazonApps.map(app => <option key={app.id} value={app.id}>{app.name}</option>)}
+                    </select>
+                    {amazonApps.length === 0 && (
+                      <div style={{ fontSize: 11, color: '#f87171', marginTop: 4 }}>No apps configured. Go to Admin → Configuration to add one.</div>
+                    )}
+                  </div>
+                  <div className="form-group">
+                    <label className="label">Seller ID</label>
+                    <input className="input" placeholder="e.g. A1B2C3D4E5F6G7" value={form.amazon_seller_id}
+                      onChange={e => setForm(f => ({ ...f, amazon_seller_id: e.target.value }))} required style={{ fontFamily: 'monospace', fontSize: 12 }} />
+                    <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>Your Amazon Seller/Merchant ID from Seller Central</div>
+                  </div>
+                  <div className="form-group">
+                    <label className="label">Refresh Token (optional — auto-filled via OAuth)</label>
+                    <input className="input" type="password" placeholder="Atzr|..." value={form.amazon_refresh_token}
+                      onChange={e => setForm(f => ({ ...f, amazon_refresh_token: e.target.value }))} style={{ fontFamily: 'monospace', fontSize: 12 }} />
+                    <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>Leave blank if authorizing via OAuth later</div>
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                     <div className="form-group">
