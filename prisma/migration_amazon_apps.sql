@@ -5,7 +5,6 @@ CREATE TABLE IF NOT EXISTS amazon_apps (
   app_id TEXT NOT NULL,
   client_id TEXT NOT NULL,
   client_secret TEXT NOT NULL,
-  region TEXT DEFAULT 'eu',
   is_default BOOLEAN DEFAULT false,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()

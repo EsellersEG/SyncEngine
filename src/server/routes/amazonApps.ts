@@ -17,7 +17,7 @@ router.get('/', async (req: AuthRequest, res) => {
       return res.status(403).json({ error: 'Admin access required' });
     }
     const result = await query(
-      `SELECT id, name, app_id, client_id, region, is_default, created_at, updated_at
+      `SELECT id, name, app_id, client_id, is_default, created_at, updated_at
        FROM amazon_apps ORDER BY created_at DESC`
     );
     return res.json(result.rows);
@@ -33,7 +33,7 @@ router.post('/', async (req: AuthRequest, res) => {
     if (req.user!.role !== 'admin') {
       return res.status(403).json({ error: 'Admin access required' });
     }
-    const { name, app_id, client_id, client_secret, region = 'eu', is_default } = req.body;
+    const { name, app_id, client_id, client_secret, is_default } = req.body;
     if (!name || !app_id || !client_id || !client_secret) {
       return res.status(400).json({ error: 'name, app_id, client_id, and client_secret required' });
     }
@@ -44,9 +44,9 @@ router.post('/', async (req: AuthRequest, res) => {
     }
 
     const result = await query(
-      `INSERT INTO amazon_apps (name, app_id, client_id, client_secret, region, is_default)
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, name, app_id, client_id, region, is_default, created_at`,
-      [name, app_id, client_id, client_secret, region, !!is_default]
+      `INSERT INTO amazon_apps (name, app_id, client_id, client_secret, is_default)
+       VALUES ($1, $2, $3, $4, $5) RETURNING id, name, app_id, client_id, is_default, created_at`,
+      [name, app_id, client_id, client_secret, !!is_default]
     );
     return res.status(201).json(result.rows[0]);
   } catch (err) {
@@ -61,7 +61,7 @@ router.patch('/:id', async (req: AuthRequest, res) => {
     if (req.user!.role !== 'admin') {
       return res.status(403).json({ error: 'Admin access required' });
     }
-    const { name, app_id, client_id, client_secret, region, is_default } = req.body;
+    const { name, app_id, client_id, client_secret, is_default } = req.body;
 
     // If setting as default, unset other defaults
     if (is_default) {
@@ -74,12 +74,11 @@ router.patch('/:id', async (req: AuthRequest, res) => {
         app_id = COALESCE($2, app_id),
         client_id = COALESCE($3, client_id),
         client_secret = COALESCE(NULLIF($4, ''), client_secret),
-        region = COALESCE($5, region),
-        is_default = COALESCE($6, is_default),
+        is_default = COALESCE($5, is_default),
         updated_at = NOW()
-       WHERE id = $7
-       RETURNING id, name, app_id, client_id, region, is_default, created_at, updated_at`,
-      [name || null, app_id || null, client_id || null, client_secret || null, region || null, is_default !== undefined ? !!is_default : null, req.params.id]
+       WHERE id = $6
+       RETURNING id, name, app_id, client_id, is_default, created_at, updated_at`,
+      [name || null, app_id || null, client_id || null, client_secret || null, is_default !== undefined ? !!is_default : null, req.params.id]
     );
     if (!result.rows[0]) return res.status(404).json({ error: 'Amazon app not found' });
     return res.json(result.rows[0]);
@@ -109,7 +108,7 @@ router.get('/:id/oauth-urls', async (req: AuthRequest, res) => {
     if (req.user!.role !== 'admin') {
       return res.status(403).json({ error: 'Admin access required' });
     }
-    const result = await query('SELECT id, app_id, region FROM amazon_apps WHERE id = $1', [req.params.id]);
+    const result = await query('SELECT id, app_id FROM amazon_apps WHERE id = $1', [req.params.id]);
     if (!result.rows[0]) return res.status(404).json({ error: 'Amazon app not found' });
 
     const app = result.rows[0];

@@ -7,7 +7,6 @@ interface AmazonApp {
   name: string;
   app_id: string;
   client_id: string;
-  region: string;
   is_default: boolean;
   created_at: string;
   updated_at?: string;
@@ -28,7 +27,7 @@ export default function ConfigurationPage() {
   const [showUrlsFor, setShowUrlsFor] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [form, setForm] = useState({
-    name: '', app_id: '', client_id: '', client_secret: '', region: 'eu', is_default: false,
+    name: '', app_id: '', client_id: '', client_secret: '', is_default: false,
   });
 
   useEffect(() => { loadApps(); }, []);
@@ -55,7 +54,7 @@ export default function ConfigurationPage() {
       }
       setShowForm(false);
       setEditingId(null);
-      setForm({ name: '', app_id: '', client_id: '', client_secret: '', region: 'eu', is_default: false });
+      setForm({ name: '', app_id: '', client_id: '', client_secret: '', is_default: false });
       await loadApps();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save app');
@@ -85,7 +84,7 @@ export default function ConfigurationPage() {
 
   function startEdit(app: AmazonApp) {
     setEditingId(app.id);
-    setForm({ name: app.name, app_id: app.app_id, client_id: app.client_id, client_secret: '', region: app.region, is_default: app.is_default });
+    setForm({ name: app.name, app_id: app.app_id, client_id: app.client_id, client_secret: '', is_default: app.is_default });
     setShowForm(true);
   }
 
@@ -124,7 +123,7 @@ export default function ConfigurationPage() {
               <p style={{ fontSize: 12, color: '#64748b', margin: 0 }}>Register your Amazon Developer apps for OAuth seller authorization</p>
             </div>
           </div>
-          <button className="btn btn-primary btn-sm" onClick={() => { setShowForm(true); setEditingId(null); setForm({ name: '', app_id: '', client_id: '', client_secret: '', region: 'eu', is_default: false }); }}>
+          <button className="btn btn-primary btn-sm" onClick={() => { setShowForm(true); setEditingId(null); setForm({ name: '', app_id: '', client_id: '', client_secret: '', is_default: false }); }}>
             <Plus size={14} /> Add App
           </button>
         </div>
@@ -148,9 +147,6 @@ export default function ConfigurationPage() {
                       <Star size={10} style={{ marginRight: 3 }} />DEFAULT
                     </span>
                   )}
-                  <span style={{ fontSize: 11, background: 'rgba(79,110,247,0.15)', color: '#6b87ff', padding: '2px 8px', borderRadius: 10 }}>
-                    {app.region.toUpperCase()}
-                  </span>
                 </div>
                 <div style={{ fontSize: 12, color: '#64748b', fontFamily: 'monospace' }}>
                   App ID: {app.app_id}
@@ -218,20 +214,10 @@ export default function ConfigurationPage() {
             </div>
 
             <form onSubmit={handleSubmit}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="label">App Name</label>
-                  <input className="input" placeholder="e.g. My SP-API App" value={form.name}
-                    onChange={e => setForm(f => ({ ...f, name: e.target.value }))} required />
-                </div>
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="label">Region</label>
-                  <select className="input" value={form.region} onChange={e => setForm(f => ({ ...f, region: e.target.value }))}>
-                    <option value="na">North America (NA)</option>
-                    <option value="eu">Europe / MENA (EU)</option>
-                    <option value="fe">Far East (FE)</option>
-                  </select>
-                </div>
+              <div className="form-group" style={{ marginBottom: 12 }}>
+                <label className="label">App Name</label>
+                <input className="input" placeholder="e.g. My SP-API App" value={form.name}
+                  onChange={e => setForm(f => ({ ...f, name: e.target.value }))} required />
               </div>
 
               <div className="form-group" style={{ marginBottom: 12 }}>
