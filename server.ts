@@ -104,6 +104,28 @@ app.listen(PORT, async () => {
     await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS permissions TEXT[] DEFAULT '{}'`);
   } catch (e) { console.log('[Migration] permissions column:', (e as Error).message); }
 
+  // Auto-migrate: create amazon_apps + oauth_tokens tables if not exist
+  try {
+    await query(`CREATE TABLE IF NOT EXISTS amazon_apps (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name TEXT NOT NULL,
+      app_id TEXT NOT NULL,
+      client_id TEXT NOT NULL,
+      client_secret TEXT NOT NULL,
+      is_default BOOLEAN DEFAULT false,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+    await query(`CREATE TABLE IF NOT EXISTS amazon_oauth_tokens (
+      seller_id TEXT PRIMARY KEY,
+      refresh_token TEXT NOT NULL,
+      app_id UUID REFERENCES amazon_apps(id) ON DELETE CASCADE,
+      client_id TEXT,
+      linked_channel_id UUID REFERENCES channels(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+  } catch (e) { console.log('[Migration] amazon_apps:', (e as Error).message); }
+
   // Clean up orphaned running/pending jobs from previous deploys/crashes
   try {
     const cleaned = await query(
