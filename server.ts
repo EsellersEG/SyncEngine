@@ -20,6 +20,8 @@ import invoiceRoutes from './src/server/routes/invoices.js';
 import taskRoutes from './src/server/routes/tasks.js';
 import noonRoutes from './src/server/routes/noon.js';
 import amazonRoutes from './src/server/routes/amazon.js';
+import amazonOAuthRoutes from './src/server/routes/amazonOAuth.js';
+import amazonAppsRoutes from './src/server/routes/amazonApps.js';
 import toolsRoutes from './src/server/routes/tools.js';
 import analyticsRoutes from './src/server/routes/analytics.js';
 import { startScheduler } from './src/server/services/scheduler.js';
@@ -63,6 +65,8 @@ app.use('/api/automations', automationRoutes);
 app.use('/api/invoices', invoiceRoutes);
 app.use('/api/tasks', taskRoutes);
 app.use('/api/noon', noonRoutes);
+app.use('/api/amazon/oauth', amazonOAuthRoutes);  // Must be before /api/amazon (no auth)
+app.use('/api/amazon/apps', amazonAppsRoutes);
 app.use('/api/amazon', amazonRoutes);
 app.use('/api/tools', toolsRoutes);
 app.use('/api/analytics', analyticsRoutes);

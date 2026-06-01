@@ -27,6 +27,7 @@ const navItems = [
 
 const adminItems = [
   { to: '/users', icon: Settings, label: 'Users & Access' },
+  { to: '/configuration', icon: Wrench, label: 'Configuration' },
 ];
 
 export default function Layout() {
