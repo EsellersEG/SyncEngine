@@ -87,15 +87,27 @@ router.get('/callback', async (req, res) => {
       return res.status(400).send('Missing spapi_oauth_code — authorization was not granted');
     }
 
-    // Parse state: "selling_partner_id|app_uuid"
-    const stateParts = String(state || '').split('|');
-    const sellerPartnerId = String(selling_partner_id || stateParts[0] || '');
-    const appUuid = stateParts[1] || '';
+    // Parse state: could be "seller_id|app_uuid" (from /login redirect)
+    // or just "app_uuid" (from direct Seller Central website workflow)
+    const stateStr = String(state || '');
+    const stateParts = stateStr.split('|');
+    let sellerPartnerId: string;
+    let appUuid: string;
+
+    if (stateParts.length >= 2) {
+      // Came through /login: state = "seller_id|app_uuid"
+      sellerPartnerId = String(selling_partner_id || stateParts[0] || '');
+      appUuid = stateParts[1];
+    } else {
+      // Direct website workflow: state = "app_uuid", selling_partner_id is a query param
+      sellerPartnerId = String(selling_partner_id || '');
+      appUuid = stateStr;
+    }
 
     // Look up app credentials from DB
     const app = await getAppCredentials(appUuid || undefined);
     if (!app.client_id || !app.client_secret) {
-      console.error('[Amazon OAuth] No app credentials found');
+      console.error(`[Amazon OAuth] No app credentials found for appUuid=${appUuid}`);
       return res.status(500).send('No Amazon app credentials configured');
     }
 
